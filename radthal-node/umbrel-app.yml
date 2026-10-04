@@ -1,0 +1,16 @@
+manifestVersion: 1.1
+id: radthal-node
+category: bitcoin
+name: Radthal Node
+version: "1.0.0"
+tagline: Etat du noeud Radthal
+description: >-
+  Etat du noeud Radthal : blocs, difficulte, pairs connectes, ports. Lit le noeud Radthal deja installe sur cet Umbrel.
+developer: Radthal Community
+website: ""
+dependencies: []
+repo: ""
+support: ""
+port: 3777
+gallery: []
+path: ""

@@ -1,0 +1,16 @@
+manifestVersion: 1.1
+id: radthal-dashboard
+category: bitcoin
+name: Radthal Dashboard
+version: "1.0.0"
+tagline: Vue d'ensemble de Radthal
+description: >-
+  Vue d'ensemble de la chaine Radthal : blocs, difficulte, puissance du reseau, solde du portefeuille, mempool et mineurs ckpool.
+developer: Radthal Community
+website: ""
+dependencies: []
+repo: ""
+support: ""
+port: 3778
+gallery: []
+path: ""

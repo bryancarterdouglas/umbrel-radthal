@@ -1,0 +1,16 @@
+manifestVersion: 1.1
+id: radthal-mempool
+category: bitcoin
+name: Radthal Mempool
+version: "1.0.0"
+tagline: Mempool et blocs de Radthal
+description: >-
+  Transactions en attente, repartition des frais et derniers blocs de la chaine Radthal.
+developer: Radthal Community
+website: ""
+dependencies: []
+repo: ""
+support: ""
+port: 3779
+gallery: []
+path: ""

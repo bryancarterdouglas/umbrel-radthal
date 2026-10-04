@@ -1,0 +1,16 @@
+manifestVersion: 1.1
+id: radthal-ckpool
+category: bitcoin
+name: Radthal ckpool
+version: "1.0.0"
+tagline: Statistiques du pool solo
+description: >-
+  Statistiques du pool solo ckpool de Radthal : mineurs, hashrate, parts, et reglages de connexion pour un ASIC.
+developer: Radthal Community
+website: ""
+dependencies: []
+repo: ""
+support: ""
+port: 3780
+gallery: []
+path: ""

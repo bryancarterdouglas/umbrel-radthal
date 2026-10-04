@@ -7,10 +7,11 @@ tagline: Statistiques du pool solo
 description: >-
   Statistiques du pool solo ckpool de Radthal : mineurs, hashrate, parts, et reglages de connexion pour un ASIC.
 developer: Radthal Community
-website: ""
+website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []
-repo: ""
-support: ""
+repo: https://github.com/bryancarterdouglas/Umbrel-radthal
+support: https://github.com/bryancarterdouglas/Umbrel-radthal/issues
 port: 3780
 gallery: []
 path: ""
+icon: https://raw.githubusercontent.com/bryancarterdouglas/Umbrel-radthal/main/radthal-ckpool/icon.png

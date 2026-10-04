@@ -7,10 +7,11 @@ tagline: Etat du noeud Radthal
 description: >-
   Etat du noeud Radthal : blocs, difficulte, pairs connectes, ports. Lit le noeud Radthal deja installe sur cet Umbrel.
 developer: Radthal Community
-website: ""
+website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []
-repo: ""
-support: ""
+repo: https://github.com/bryancarterdouglas/Umbrel-radthal
+support: https://github.com/bryancarterdouglas/Umbrel-radthal/issues
 port: 3777
 gallery: []
 path: ""
+icon: https://raw.githubusercontent.com/bryancarterdouglas/Umbrel-radthal/main/radthal-node/icon.png

@@ -7,10 +7,11 @@ tagline: Vue d'ensemble de Radthal
 description: >-
   Vue d'ensemble de la chaine Radthal : blocs, difficulte, puissance du reseau, solde du portefeuille, mempool et mineurs ckpool.
 developer: Radthal Community
-website: ""
+website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []
-repo: ""
-support: ""
+repo: https://github.com/bryancarterdouglas/Umbrel-radthal
+support: https://github.com/bryancarterdouglas/Umbrel-radthal/issues
 port: 3778
 gallery: []
 path: ""
+icon: https://raw.githubusercontent.com/bryancarterdouglas/Umbrel-radthal/main/radthal-dashboard/icon.png

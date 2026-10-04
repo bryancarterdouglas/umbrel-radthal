@@ -7,10 +7,11 @@ tagline: Mempool et blocs de Radthal
 description: >-
   Transactions en attente, repartition des frais et derniers blocs de la chaine Radthal.
 developer: Radthal Community
-website: ""
+website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []
-repo: ""
-support: ""
+repo: https://github.com/bryancarterdouglas/Umbrel-radthal
+support: https://github.com/bryancarterdouglas/Umbrel-radthal/issues
 port: 3779
 gallery: []
 path: ""
+icon: https://raw.githubusercontent.com/bryancarterdouglas/Umbrel-radthal/main/radthal-mempool/icon.png

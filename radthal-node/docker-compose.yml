@@ -8,9 +8,10 @@ services:
 
   # Le noeud Radthal lui-meme (bitcoind). Meme image, meme programme et memes
   # donnees que l'ancien conteneur lance a la main : rien n'est copie ni perdu.
+  # Umbrel telecharge toujours les images : celle-ci vient du petit registre
+  # local (conteneur radthal-registry, port 5000 de ce Pi uniquement).
   daemon:
-    image: radthal-build
-    pull_policy: never
+    image: localhost:5000/radthal-build:v1
     restart: on-failure
     network_mode: host
     # bitcoind a besoin de temps pour sauvegarder son etat a l'arret

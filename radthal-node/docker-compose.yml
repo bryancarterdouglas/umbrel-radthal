@@ -6,6 +6,20 @@ services:
       APP_HOST: radthal-node_web_1
       APP_PORT: 3777
 
+  # Le noeud Radthal lui-meme (bitcoind). Meme image, meme programme et memes
+  # donnees que l'ancien conteneur lance a la main : rien n'est copie ni perdu.
+  daemon:
+    image: radthal-build
+    pull_policy: never
+    restart: on-failure
+    network_mode: host
+    # bitcoind a besoin de temps pour sauvegarder son etat a l'arret
+    stop_grace_period: 2m
+    command: ["/build/bin/bitcoind", "-datadir=/data", "-printtoconsole"]
+    volumes:
+      - /home/umbrel/radthal/build:/build:ro
+      - /home/umbrel/radthal-data:/data
+
   web:
     image: python:3.12-alpine
     restart: on-failure

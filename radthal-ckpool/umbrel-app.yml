@@ -2,10 +2,12 @@ manifestVersion: 1.1
 id: radthal-ckpool
 category: bitcoin
 name: Radthal ckpool
-version: "1.0.0"
+version: "1.1.0"
 tagline: Statistiques du pool solo
 description: >-
   Statistiques du pool solo ckpool de Radthal : mineurs, hashrate, parts, et reglages de connexion pour un ASIC.
+releaseNotes: >-
+  Nouvelle interface animee : chaine de blocs en direct, compteurs, mineur ASIC, mise a jour sans recharger la page.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

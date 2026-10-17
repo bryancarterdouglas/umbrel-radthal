@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-mempool
 category: bitcoin
 name: Radthal Mempool
-version: "1.1.1"
+version: "1.1.2"
 tagline: Mempool et blocs de Radthal
 description: >-
   Transactions en attente, repartition des frais et derniers blocs de la chaine Radthal.
 releaseNotes: >-
-  Corrections : synchronisation du noeud, vrai nombre de blocs trouves, affichage sur telephone.
+  Corrections : comptage des blocs trouves plus leger, nombres qui ne se coupent plus, anciens appareils masques.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

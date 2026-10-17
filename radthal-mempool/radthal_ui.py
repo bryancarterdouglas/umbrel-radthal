@@ -28,14 +28,14 @@ SUBTITLES = {"node": "L'état de ton nœud complet",
 
 # ---------------------------------------------------------------- acces au noeud
 
-def rpc(method, params=None, wallet=None):
+def rpc(method, params=None, wallet=None, timeout=3):
     try:
         pw = open(PASSFILE).read().strip()
         auth = "Basic " + base64.b64encode((RPCUSER + ":" + pw).encode()).decode()
         url = RPC + ("/wallet/" + wallet if wallet else "")
         body = json.dumps({"jsonrpc": "1.0", "id": "u", "method": method, "params": params or []}).encode()
         req = urllib.request.Request(url, body, {"Content-Type": "application/json", "Authorization": auth})
-        with urllib.request.urlopen(req, timeout=3) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)["result"]
     except Exception:
         return None
@@ -75,8 +75,9 @@ def recent_blocks(n=14):
     return out
 
 
-_W = {"mined": {}, "scanned": False}
+_W = {"mined": {}, "light": False, "scanned": False}
 _W_LOCK = threading.Lock()
+FULL_SCAN = VIEW in ("dashboard", "ckpool")     # seules ces pages affichent le total de blocs trouves
 
 
 def _slim(t):
@@ -96,25 +97,26 @@ def _wallet_apply(txs, mined):
 
 
 def wallet_refresh():
-    """Premiere fois : lit tout le portefeuille par pages de 500 (listtransactions est limite).
-    Ensuite : ne relit que les dernieres transactions."""
-    if not _W["scanned"]:
-        mined, skip = {}, 0
-        while skip < 500000:
-            txs = rpc("listtransactions", ["*", 500, skip], wallet=WALLET)
-            if txs is None:
-                return
-            _wallet_apply(txs, mined)
-            if len(txs) < 500:
-                break
-            skip += 500
+    """1) les 200 dernieres transactions (rapide) : sert a marquer tes blocs ;
+    2) une seule fois, tout le portefeuille en UN appel (plusieurs appels par pages seraient bien plus lourds)."""
+    txs = rpc("listtransactions", ["*", 200, 0], wallet=WALLET)
+    if txs is None:
+        return
+    with _W_LOCK:
+        _wallet_apply(txs, _W["mined"])
+        _W["light"] = True
+        if not FULL_SCAN:
+            _W["scanned"] = True
+    if FULL_SCAN and not _W["scanned"]:
+        allt = rpc("listtransactions", ["*", 10000000, 0], wallet=WALLET, timeout=120)
+        if allt is None:
+            return
+        mined = {}
+        _wallet_apply(allt, mined)
+        del allt
         with _W_LOCK:
+            mined.update(_W["mined"])        # les infos les plus fraiches gagnent
             _W["mined"], _W["scanned"] = mined, True
-    else:
-        txs = rpc("listtransactions", ["*", 200, 0], wallet=WALLET)
-        if txs is not None:
-            with _W_LOCK:
-                _wallet_apply(txs, _W["mined"])
 
 
 def wallet_loop():
@@ -123,7 +125,7 @@ def wallet_loop():
             wallet_refresh()
         except Exception:
             pass
-        time.sleep(8 if _W["scanned"] else 4)
+        time.sleep(8 if _W["light"] else 4)
 
 
 def wallet_blocks():
@@ -134,7 +136,7 @@ def wallet_blocks():
 
 def found_card(mine, sub="par ce portefeuille"):
     if not _W["scanned"]:
-        return card("found", "Blocs trouvés", value="calcul…", sub="lecture du portefeuille en cours")
+        return card("found", "Blocs trouvés", value="calcul…", sub="lecture du portefeuille (une fois, ça peut prendre une minute)")
     return card("found", "Blocs trouvés", num=len(mine), sub=sub, accent=len(mine) > 0)
 
 
@@ -372,8 +374,8 @@ def view_dashboard():
         card("peers", "Pairs connectés", num=net.get("connections")) if net else card("peers", "Pairs connectés", value="-"),
         card("mempool", "Transactions en attente", num=mp.get("size")) if mp else card("mempool", "Transactions en attente", value="-"),
         found_card(mine),
-        card("bal", "Solde disponible", num=round(bal.get("trusted") or 0, 2), dec=2, unit="RDT") if bal else card("bal", "Solde disponible", value="-"),
-        card("imm", "Solde en maturation", num=round(bal.get("immature") or 0, 2), dec=2, unit="RDT",
+        card("bal", "Solde disponible", num=round(bal.get("trusted") or 0, 2), dec=2 if (bal.get("trusted") or 0) < 10000 else 0, unit="RDT") if bal else card("bal", "Solde disponible", value="-"),
+        card("imm", "Solde en maturation", num=round(bal.get("immature") or 0, 2), dec=2 if (bal.get("immature") or 0) < 10000 else 0, unit="RDT",
              sub="Une récompense devient utilisable après 100 blocs") if bal else card("imm", "Solde en maturation", value="-"),
     ]
     secs.append(cards("stats", items))
@@ -495,7 +497,7 @@ def view_ckpool():
             sub = "%s %% du chemin vers un bloc" % fnum(best / diff * 100, 4)
         items.append(card("best", "Meilleure part", num=n, dec=d, unit=u, sub=sub))
     tip = info.get("blocks")
-    if info and _W["scanned"] and tip is not None and any(t.get("blockheight") is not None for t in mine.values()):
+    if info and _W["light"] and tip is not None and any(t.get("blockheight") is not None for t in mine.values()):
         last100 = sum(1 for t in mine.values() if (t.get("blockheight") or -1) > tip - 100)
         items.append(card("last100", "Tes blocs · 100 derniers", num=last100, unit="/ 100",
                           sub="Part des derniers blocs trouvés par ce mineur", accent=last100 > 0))
@@ -514,6 +516,8 @@ def view_ckpool():
     rows = []
     for w in workers:
         ls = float(w.get("lastshare") or 0)
+        if not ls or now - ls > 86400:
+            continue          # ancien appareil, inactif depuis plus d'un jour
         active = ls and now - ls < 180
         rows.append([{"t": "● en ligne" if active else "○ inactif", "cls": "good" if active else "muted"},
                      worker_label(w.get("workername")), fhs(parse_hs(w.get("hashrate1m"))),
@@ -522,7 +526,7 @@ def view_ckpool():
                      fsc(w.get("shares") or 0),
                      fsc(w.get("bestever") or 0)])
     secs.append(table("workers", "Tes appareils", ["État", "Nom", "Hashrate 1 min", "Hashrate 5 min", "Dernière part", "Parts", "Meilleure part"], rows,
-                      "Aucun mineur n'est connecté. Branche ton ASIC avec les réglages ci-dessous."))
+                      "Aucun mineur actif ces dernières 24 h. Branche ton ASIC avec les réglages ci-dessous."))
 
     secs.append({"id": "connect", "type": "connect", "title": "Connecter un mineur", "items": [
         {"label": "URL du pool", "value": "stratum+tcp://{host}:" + STRATUM, "copy": True},
@@ -619,7 +623,9 @@ h1{font-size:24px;font-weight:800;letter-spacing:-.01em;margin:0}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
 .card{background:var(--card);border:1px solid var(--edge);border-radius:14px;padding:13px 15px;position:relative;overflow:hidden;transition:border-color .5s,box-shadow .5s}
 .card .lab{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mu)}
-.card .v{font-size:27px;font-weight:800;letter-spacing:-.01em;margin-top:5px;font-variant-numeric:tabular-nums;line-height:1.15;word-break:break-word}
+.card .v{font-size:27px;font-weight:800;letter-spacing:-.01em;margin-top:5px;font-variant-numeric:tabular-nums;line-height:1.15}
+.card .v .n{white-space:nowrap}
+.card .v.long{font-size:21px}
 .card .v .u{font-size:14px;font-weight:600;color:var(--mu);margin-left:4px;white-space:nowrap;display:inline-block}
 .card .s{font-size:12px;color:var(--mu);margin-top:5px;line-height:1.35}
 .card .v.t{font-size:20px;word-break:normal;overflow-wrap:anywhere}
@@ -735,6 +741,7 @@ R.cards=(rec,d)=>{
   if(it.num!==null&&it.num!==undefined){const ch=setNum(c.n,it.num,it.dec||0);if(ch&&c.hadValue){c.el.classList.add("bump");setTimeout(()=>c.el.classList.remove("bump"),1300);}c.hadValue=true;}
   else{c.n.textContent=it.value!=null?it.value:"-";c.n._shown=undefined;}
   c.v.classList.toggle("t",!(it.num!==null&&it.num!==undefined));
+  c.v.classList.toggle("long",it.num!==null&&it.num!==undefined&&fmt(it.num,it.dec||0).length>9);
  });
  for(const k in rec.map)if(!seen.has(k)){rec.map[k].el.remove();delete rec.map[k];}
  order(rec.grid,d.items.map(i=>rec.map[i.id].el));

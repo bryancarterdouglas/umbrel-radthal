@@ -18,7 +18,7 @@ LOGS = os.environ.get("LOGS", "/ckpool/logs")
 PORT = int(os.environ.get("PORT", "8000"))
 WALLET = os.environ.get("WALLET", "minage")
 STRATUM = os.environ.get("STRATUM_PORT", "3333")
-TITLES = {"node": "Noeud Radthal", "dashboard": "Tableau de bord Radthal",
+TITLES = {"node": "Nœud Radthal", "dashboard": "Tableau de bord Radthal",
           "mempool": "Mempool Radthal", "ckpool": "ckpool Radthal"}
 SUBTITLES = {"node": "L'état de ton nœud complet",
              "dashboard": "La chaîne Radthal en direct",
@@ -75,13 +75,67 @@ def recent_blocks(n=14):
     return out
 
 
+_W = {"mined": {}, "scanned": False}
+_W_LOCK = threading.Lock()
+
+
+def _slim(t):
+    return {"blockhash": t.get("blockhash"), "amount": t.get("amount"), "confirmations": t.get("confirmations"),
+            "blockheight": t.get("blockheight")}
+
+
+def _wallet_apply(txs, mined):
+    for t in txs:
+        bh = t.get("blockhash")
+        if not bh:
+            continue
+        if t.get("category") in ("generate", "immature"):
+            mined[bh] = _slim(t)
+        elif t.get("category") == "orphan":
+            mined.pop(bh, None)
+
+
+def wallet_refresh():
+    """Premiere fois : lit tout le portefeuille par pages de 500 (listtransactions est limite).
+    Ensuite : ne relit que les dernieres transactions."""
+    if not _W["scanned"]:
+        mined, skip = {}, 0
+        while skip < 500000:
+            txs = rpc("listtransactions", ["*", 500, skip], wallet=WALLET)
+            if txs is None:
+                return
+            _wallet_apply(txs, mined)
+            if len(txs) < 500:
+                break
+            skip += 500
+        with _W_LOCK:
+            _W["mined"], _W["scanned"] = mined, True
+    else:
+        txs = rpc("listtransactions", ["*", 200, 0], wallet=WALLET)
+        if txs is not None:
+            with _W_LOCK:
+                _wallet_apply(txs, _W["mined"])
+
+
+def wallet_loop():
+    while True:
+        try:
+            wallet_refresh()
+        except Exception:
+            pass
+        time.sleep(8 if _W["scanned"] else 4)
+
+
 def wallet_blocks():
-    """Blocs trouves par ce portefeuille : {hash du bloc: transaction coinbase}."""
-    res = {}
-    for t in rpc("listtransactions", ["*", 500], wallet=WALLET) or []:
-        if t.get("category") in ("generate", "immature") and t.get("blockhash"):
-            res[t["blockhash"]] = t
-    return res
+    """Blocs trouves par ce portefeuille : {hash du bloc: infos de la transaction coinbase}."""
+    with _W_LOCK:
+        return dict(_W["mined"])
+
+
+def found_card(mine, sub="par ce portefeuille"):
+    if not _W["scanned"]:
+        return card("found", "Blocs trouvés", value="calcul…", sub="lecture du portefeuille en cours")
+    return card("found", "Blocs trouvés", num=len(mine), sub=sub, accent=len(mine) > 0)
 
 
 # ---------------------------------------------------------------- formats
@@ -293,7 +347,7 @@ def common_cards(info, nh, mine_txs):
     return [
         card("height", "Blocs", num=h, accent=True) if h is not None else card("height", "Blocs", value="-", accent=True),
         card("diff", "Difficulté", num=round(diff, 2 if diff < 1000 else 0), dec=2 if diff < 1000 else 0) if diff is not None else card("diff", "Difficulté", value="-"),
-        card("nethash", "Puissance du réseau", num=n, dec=2, unit=u),
+        card("nethash", "Puissance du réseau", num=n, dec=2, unit=u, sub="estimée sur les 30 derniers blocs"),
         card("left", "Blocs avant l'ajustement", num=left, sub="La difficulté s'ajuste tous les 2 016 blocs") if left is not None else card("left", "Blocs avant l'ajustement", value="-"),
     ]
 
@@ -311,13 +365,13 @@ def view_dashboard():
     mp = rpc("getmempoolinfo") or {}
     net = rpc("getnetworkinfo") or {}
     bal = (rpc("getbalances", wallet=WALLET) or {}).get("mine", {})
-    nh = rpc("getnetworkhashps") or 0
+    nh = rpc("getnetworkhashps", [30]) or 0
     secs.append(blocks_section(info.get("blocks"), mine))
     items = common_cards(info, nh, mine)
     items += [
         card("peers", "Pairs connectés", num=net.get("connections")) if net else card("peers", "Pairs connectés", value="-"),
         card("mempool", "Transactions en attente", num=mp.get("size")) if mp else card("mempool", "Transactions en attente", value="-"),
-        card("found", "Blocs trouvés", num=len(mine), sub="par ce portefeuille", accent=len(mine) > 0),
+        found_card(mine),
         card("bal", "Solde disponible", num=round(bal.get("trusted") or 0, 2), dec=2, unit="RDT") if bal else card("bal", "Solde disponible", value="-"),
         card("imm", "Solde en maturation", num=round(bal.get("immature") or 0, 2), dec=2, unit="RDT",
              sub="Une récompense devient utilisable après 100 blocs") if bal else card("imm", "Solde en maturation", value="-"),
@@ -340,15 +394,17 @@ def view_node():
     if isinstance(warn, list):
         warn = " ; ".join(warn)
     blocks, headers = info.get("blocks", 0), info.get("headers", 0)
-    prog = float(info.get("verificationprogress") or 0)
-    synced = prog > 0.9995 and blocks >= headers
+    tip_t = info.get("time") or info.get("mediantime")
+    recent = bool(tip_t) and time.time() - tip_t < 3600
+    synced = headers > 0 and blocks >= headers and (not info.get("initialblockdownload") or recent)
+    pct = 100.0 if synced else (blocks / headers * 100 if headers else 0.0)
     secs.append(blocks_section(blocks, wallet_blocks()))
     dn, du = size_parts(info.get("size_on_disk"))
     inb = sum(1 for p in peers if p.get("inbound"))
     secs.append(cards("stats", [
         card("state", "État", value="En marche", tone="good"),
         card("height", "Blocs", num=blocks, accent=True),
-        card("sync", "Synchronisation", num=round(min(prog, 1) * 100, 2 if synced else 1), dec=2 if synced else 1, unit="%",
+        card("sync", "Synchronisation", num=round(min(pct, 100), 1), dec=1, unit="%",
              sub="À jour" if synced else "Rattrapage en cours (%s / %s)" % (blocks, headers), tone="good" if synced else "warn"),
         card("diff", "Difficulté", num=round(info.get("difficulty") or 0, 2), dec=2),
         card("peers", "Connexions", num=net.get("connections"), sub="%d entrantes · %d sortantes" % (inb, len(peers) - inb)),
@@ -385,7 +441,7 @@ def view_mempool():
     bn, bu = size_parts(mp.get("bytes"))
     secs.append(cards("stats", [
         card("size", "Transactions en attente", num=mp.get("size"), accent=True) if mp else card("size", "Transactions en attente", value="-"),
-        card("bytes", "Taille", num=bn, dec=1, unit=bu),
+        card("bytes", "Taille", num=bn, dec=0 if bu == "o" else 1, unit=bu),
         card("fees", "Frais totaux", num=round(mp.get("total_fee") or 0, 8), dec=auto_dec(mp.get("total_fee") or 0), unit="RDT") if mp else card("fees", "Frais totaux", value="-"),
         card("minfee", "Frais minimum", num=mp.get("mempoolminfee"), dec=auto_dec(mp.get("mempoolminfee") or 0), unit="RDT/kvB") if mp.get("mempoolminfee") is not None else card("minfee", "Frais minimum", value="-"),
     ]))
@@ -399,8 +455,8 @@ def view_mempool():
             bars.append({"label": lab + " sat/vB", "count": len(sel), "size": sum(t[2] for t in sel)})
         secs.append({"id": "bars", "type": "bars", "title": "Répartition des frais", "items": bars})
         secs.append(table("txs", "Transactions (les 50 premières, par frais décroissants)",
-                          ["Txid", "Frais (sat/vB)", "Taille (vB)", "Attente"],
-                          [[t[1][:20] + "…", fnum(t[0], 1), t[2], {"age": t[4]}] for t in txs[:50]]))
+                          ["Txid", "sat/vB", "Taille vB", "Attente"],
+                          [[t[1][:12] + "…", fnum(t[0], 1), t[2], {"age": t[4]}] for t in txs[:50]]))
     return secs, inf
 
 
@@ -408,11 +464,10 @@ def view_ckpool():
     st = ckpool_status()
     workers = ckpool_workers()
     info = rpc("getblockchaininfo") or {}
-    nh = (rpc("getnetworkhashps") or 0) if info else 0
     mine = wallet_blocks() if info else {}
     diff = info.get("difficulty") or 0
     secs = []
-    miner = miner_section(st, workers, nh)
+    miner = miner_section(st, workers, 0)
     secs.append(miner)
 
     h1, h5, h1h = parse_hs(st.get("hashrate1m")), parse_hs(st.get("hashrate5m")), parse_hs(st.get("hashrate1hr"))
@@ -432,17 +487,24 @@ def view_ckpool():
     best = max([float(w.get("bestever") or 0) for w in workers] + [float(st.get("bestshare") or 0)])
     if best:
         n, d, u = scale(best)
-        items.append(card("best", "Meilleure part", num=n, dec=d, unit=u,
-                          sub=("%s %% du chemin vers un bloc" % fnum(min(best / diff, 1) * 100, 4)) if diff else ""))
-    if nh > 0 and h5 > 0:
-        items.append(card("share", "Part du réseau", num=round(min(h5 / nh, 1) * 100, 1), dec=1, unit="%",
-                          sub="Ton hashrate 5 min / celui du réseau"))
+        if not diff:
+            sub = ""
+        elif best >= diff:
+            sub = "Au-dessus de la difficulté du réseau : de quoi gagner un bloc"
+        else:
+            sub = "%s %% du chemin vers un bloc" % fnum(best / diff * 100, 4)
+        items.append(card("best", "Meilleure part", num=n, dec=d, unit=u, sub=sub))
+    tip = info.get("blocks")
+    if info and _W["scanned"] and tip is not None and any(t.get("blockheight") is not None for t in mine.values()):
+        last100 = sum(1 for t in mine.values() if (t.get("blockheight") or -1) > tip - 100)
+        items.append(card("last100", "Tes blocs · 100 derniers", num=last100, unit="/ 100",
+                          sub="Part des derniers blocs trouvés par ce mineur", accent=last100 > 0))
     if diff > 0 and h5 > 0:
         exp = diff * 4294967296.0 / h5
         items.append(card("eta", "Un bloc en moyenne toutes les", value="≈ " + dur(exp),
                           sub="Une moyenne, pas une promesse : c'est la chance qui décide"))
     if info:
-        items.append(card("found", "Blocs trouvés", num=len(mine), sub="par ce portefeuille", accent=len(mine) > 0))
+        items.append(found_card(mine))
     if not st:      # ckpool n'a rien ecrit : inutile d'afficher des compteurs a zero
         items = [it for it in items if it["id"] == "found"]
     if items:
@@ -469,14 +531,14 @@ def view_ckpool():
         "warn": "Le port %s sert uniquement à ton réseau local. Ne l'ouvre jamais sur Internet." % STRATUM})
 
     if mine:
-        top = sorted(mine.values(), key=lambda t: t.get("confirmations", 0))[:8]
+        top = sorted(mine.values(), key=lambda t: t.get("confirmations") or 0)[:8]
         rows = []
         for t in top:
             b = get_block(t["blockhash"])
             conf = int(t.get("confirmations") or 0)
             rows.append([b["h"] if b else "-", {"age": b["time"]} if b else "-", fnum(abs(float(t.get("amount") or 0)), 2) + " RDT",
-                         {"t": "utilisable", "cls": "good"} if conf >= 101 else {"t": "maturation %d/100" % max(conf - 1, 0), "cls": "warn"}])
-        secs.append(table("mine", "Blocs trouvés par ce mineur", ["Bloc", "Trouvé il y a", "Récompense", "État"], rows))
+                         {"t": "utilisable", "cls": "good"} if conf >= 101 else {"t": "%d / 100" % max(conf - 1, 0), "cls": "warn"}])
+        secs.append(table("mine", "Derniers blocs trouvés par ce mineur", ["Bloc", "Il y a", "Récompense", "Maturité"], rows))
     if info:
         secs.append(blocks_section(info.get("blocks"), mine))
     return secs, info
@@ -558,7 +620,7 @@ h1{font-size:24px;font-weight:800;letter-spacing:-.01em;margin:0}
 .card{background:var(--card);border:1px solid var(--edge);border-radius:14px;padding:13px 15px;position:relative;overflow:hidden;transition:border-color .5s,box-shadow .5s}
 .card .lab{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mu)}
 .card .v{font-size:27px;font-weight:800;letter-spacing:-.01em;margin-top:5px;font-variant-numeric:tabular-nums;line-height:1.15;word-break:break-word}
-.card .v .u{font-size:14px;font-weight:600;color:var(--mu);margin-left:4px}
+.card .v .u{font-size:14px;font-weight:600;color:var(--mu);margin-left:4px;white-space:nowrap;display:inline-block}
 .card .s{font-size:12px;color:var(--mu);margin-top:5px;line-height:1.35}
 .card .v.t{font-size:20px;word-break:normal;overflow-wrap:anywhere}
 .card.accent .v{color:var(--acc)}
@@ -600,6 +662,7 @@ th,td{padding:9px 14px;text-align:left;font-size:13px;white-space:nowrap}
 th{color:var(--mu);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--edge)}
 td{border-bottom:1px solid rgba(46,58,80,.55);font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:0}
+@media(max-width:640px){th,td{padding:8px 9px;font-size:12px}th{font-size:10px;letter-spacing:.04em}}
 .empty{padding:16px;color:var(--mu);font-size:13px}
 .kv td:first-child{color:var(--mu);width:44%}
 .bars{background:var(--card);border:1px solid var(--edge);border-radius:14px;padding:14px 16px}
@@ -829,4 +892,5 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=wallet_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

@@ -1,0 +1,27 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: radthal-wallet_web_1
+      APP_PORT: 3781
+
+  web:
+    image: python:3.12-alpine
+    restart: on-failure
+    stop_grace_period: 5s
+    extra_hosts:
+      - "radthal-host:host-gateway"
+    command: ["python", "/app/radthal_ui.py"]
+    volumes:
+      - ${APP_DATA_DIR}/radthal_ui.py:/app/radthal_ui.py:ro
+      - /home/umbrel/radthal/rpcpass.txt:/run/secrets/radthal_rpc_password:ro
+    environment:
+      VIEW: wallet
+      PORT: "3781"
+      RPC: "http://radthal-host:9332"
+      PASSFILE: /run/secrets/radthal_rpc_password
+      WALLET: minage
+      # dossier de sauvegarde : vu par le noeud (/data), puis tel qu'on le voit sur le Pi
+      BACKUP_DIR: /data
+      BACKUP_SHOW: /home/umbrel/radthal-data

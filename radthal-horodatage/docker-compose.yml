@@ -1,0 +1,28 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: radthal-horodatage_web_1
+      APP_PORT: 3782
+
+  web:
+    image: python:3.12-alpine
+    restart: on-failure
+    stop_grace_period: 5s
+    extra_hosts:
+      - "radthal-host:host-gateway"
+    command: ["python", "/app/radthal_ui.py"]
+    volumes:
+      - ${APP_DATA_DIR}/radthal_ui.py:/app/radthal_ui.py:ro
+      - /home/umbrel/radthal/rpcpass.txt:/run/secrets/radthal_rpc_password:ro
+      # la liste des horodatages (hors du dossier de l'application : elle survit a une desinstallation)
+      - /home/umbrel/radthal/horodatage:/state
+    environment:
+      VIEW: stamp
+      PORT: "3782"
+      RPC: "http://radthal-host:9332"
+      PASSFILE: /run/secrets/radthal_rpc_password
+      WALLET: minage
+      STATE_DIR: /state
+      STATE_SHOW: /home/umbrel/radthal/horodatage

@@ -4,11 +4,12 @@ Un seul fichier, aucune dependance (Python 3 seulement). Le serveur lit le noeud
 fichiers de ckpool, et sert :
   /           la page (HTML + CSS + JS, style anime comme la video de presentation)
   /api/state  les donnees de la vue choisie par la variable VIEW, en JSON
-  /api/preview, /api/send, /api/newaddress, /api/encrypt, /api/backup  (vue "wallet" seulement, requetes POST en JSON)
+  /api/preview, /api/send, /api/newaddress, /api/encrypt, /api/backup, /api/msgpreview, /api/msgsend
+  (vue "wallet" seulement, requetes POST en JSON)
 
 La page interroge /api/state toutes les 3 secondes et met l'affichage a jour sans recharger.
 """
-import base64, glob, json, math, os, re, secrets, threading, time, urllib.error, urllib.parse, urllib.request
+import base64, glob, json, math, os, re, secrets, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 from decimal import Decimal, ROUND_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -612,7 +613,7 @@ def human_error(err):
         return "Le portefeuille « %s » n'est pas chargé sur le nœud." % WALLET
     if code == -5:
         return "Cette adresse n'est pas une adresse Radthal valide."
-    if code == -6 or "insufficient funds" in low:
+    if code == -6 or "insufficient funds" in low or "exceeds your balance" in low:
         return ("Solde disponible insuffisant. Les récompenses de minage ne sont utilisables "
                 "qu'après 100 blocs.")
     if "too large" in low:
@@ -624,6 +625,9 @@ def human_error(err):
         return "Le solde est trop faible pour payer les frais de cet envoi."
     if "fee estimation failed" in low:
         return "Le nœud n'a pas pu estimer les frais."
+    if "scriptpubkey" in low or "datacarrier" in low or "nulldata" in low or "op_return" in low:
+        return ("Ton nœud refuse cette donnée (OP_RETURN) : soit les transactions de données sont désactivées, soit "
+                "ce message dépasse la taille permise par ses réglages (options datacarrier et datacarriersize).")
     return "Refusé par le nœud : " + msg
 
 
@@ -766,6 +770,7 @@ def view_wallet():
     secs.append({"id": "receive", "type": "receive", "address": addr, "used": used})
     secs.append({"id": "send", "type": "send", "encrypted": encrypted, "can_send": synced,
                  "spendable": fmt_rdt(trusted), "rate": plain(fee_rate())})
+    secs.append(dict(msg_view(), id="msgs", type="msgs", encrypted=encrypted, can_send=synced, max=MSG_MAX))
     if not encrypted:
         secs.append({"id": "protect", "type": "protect"})
     txs, e = rpc_full("listtransactions", ["*", 30, 0, True], wallet=WALLET)
@@ -913,6 +918,306 @@ def wallet_send(token, passphrase):
                 rpc_full("walletlock", wallet=WALLET)
     if e or not txid:
         raise UserError(human_error(e or {"code": 0, "message": "pas d'identifiant de transaction"}))
+    _cache["t"] = 0
+    return str(txid)
+
+
+# ---------------------------------------------------------------- messages
+# Un message est ecrit dans la chaine par une transaction dont une sortie OP_RETURN porte "RDTM" suivi du texte
+# (UTF-8, 280 caracteres au plus). N'importe qui peut ecrire dans la chaine : les messages lus ici viennent de
+# n'importe qui. Ils ne sont affiches que comme du texte, apres nettoyage. Le mot de passe du portefeuille est
+# demande a chaque message ; il sert 30 secondes au plus et n'est ni garde ni ecrit nulle part.
+
+MSG_MAGIC = b"RDTM"
+MSG_MAGIC_HEX = MSG_MAGIC.hex()
+MSG_MAX = 280                                              # caracteres
+MSG_BACK = int(os.environ.get("MSG_BACK", "3000"))         # nombre de blocs relus au demarrage
+MSG_KEEP = 200                                             # messages gardes en memoire
+MSG_SHOWN = 30
+_PREVM = {}                    # jeton d'apercu -> {text, rate, t}
+_M = {"items": [], "scanned": None, "recent": {}, "tip": 0, "from": None, "ready": False}
+_M_LOCK = threading.Lock()
+_MINE = {}                     # txid -> True/False : la transaction est-elle dans ce portefeuille ?
+_MPEND = []                    # messages ecrits depuis cette page, pas encore vus dans un bloc : {txid, text, t}
+
+
+def clean_msg(s):
+    """Texte sur : retours a la ligne normalises, caracteres de controle et caracteres invisibles retires
+    (dont ceux qui inversent le sens de lecture), espaces simplifies."""
+    s = str(s).replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    out = []
+    for c in s:
+        cat = unicodedata.category(c)
+        if c == "\n":
+            out.append(c)
+        elif cat in ("Zl", "Zp"):
+            out.append("\n")
+        elif cat in ("Cc", "Cs", "Co", "Cn") or (cat == "Cf" and c != "‍"):
+            continue
+        else:
+            out.append(c)
+    s = "".join(out)
+    s = re.sub(r"[  ]+", " ", s)
+    s = re.sub(r" ?\n ?", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def rpc_batch(calls, wallet=None, timeout=60):
+    """Plusieurs appels RPC dans UNE requete HTTP. Renvoie la liste des resultats (None = cet appel a echoue),
+    ou None si la requete entiere echoue."""
+    try:
+        pw = open(PASSFILE).read().strip()
+        auth = "Basic " + base64.b64encode((RPCUSER + ":" + pw).encode()).decode()
+        url = RPC + ("/wallet/" + urllib.parse.quote(wallet, safe="") if wallet else "")
+        body = json.dumps([{"jsonrpc": "1.0", "id": i, "method": m, "params": p}
+                           for i, (m, p) in enumerate(calls)]).encode()
+        req = urllib.request.Request(url, body, {"Content-Type": "application/json", "Authorization": auth})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+        out = [None] * len(calls)
+        for d in data:
+            if d.get("error") is None:
+                out[d["id"]] = d.get("result")
+        return out
+    except Exception:
+        return None
+
+
+def msg_extract(block):
+    """Les messages d'un bloc (getblock au niveau 2) : une sortie OP_RETURN = "RDTM" + texte UTF-8."""
+    out = []
+    for tx in block.get("tx", []):
+        for vo in tx.get("vout", []):
+            spk = vo.get("scriptPubKey") or {}
+            if spk.get("type") != "nulldata":
+                continue
+            parts = str(spk.get("asm", "")).split()
+            if len(parts) != 2 or parts[0] != "OP_RETURN":
+                continue
+            h = parts[1]
+            if len(h) % 2 or len(h) > 8192 or not h.lower().startswith(MSG_MAGIC_HEX):
+                continue
+            try:
+                text = bytes.fromhex(h)[len(MSG_MAGIC):].decode("utf-8")
+            except ValueError:
+                continue
+            text = clean_msg(text)
+            if not text:
+                continue
+            if len(text) > MSG_MAX:
+                text = text[:MSG_MAX - 1] + "…"
+            out.append({"txid": tx.get("txid"), "height": block.get("height"), "time": block.get("time"),
+                        "i": len(out), "text": text})
+            break                                      # un message par transaction
+    return out
+
+
+def msg_scan_once():
+    """Lit les nouveaux blocs (400 au plus par tour). Renvoie True si le tour s'est bien passe."""
+    info = rpc("getblockchaininfo", timeout=10)
+    if not info:
+        return False
+    tip = int(info.get("blocks", 0))
+    with _M_LOCK:
+        scanned = _M["scanned"]
+        recent = dict(_M["recent"])
+    if scanned is not None:
+        # reorganisation : le dernier bloc lu fait-il toujours partie de la chaine ?
+        found = None
+        for h in range(min(scanned, tip), max(-1, scanned - 40), -1):
+            cur = rpc("getblockhash", [h], timeout=10)
+            if cur is None:
+                return False
+            if recent.get(h) == cur:
+                found = h
+                break
+        with _M_LOCK:
+            if found is None:
+                _M.update(items=[], scanned=None, recent={}, ready=False)
+                scanned = None
+            elif found < scanned:
+                _M["items"] = [m for m in _M["items"] if m["height"] <= found]
+                _M["scanned"] = scanned = found
+    start = max(0, tip - MSG_BACK + 1) if scanned is None else scanned + 1
+    end = min(tip, start + 399)
+    if scanned is None:
+        with _M_LOCK:
+            _M["from"] = start
+    new, newrecent = [], {}
+    if start <= end:
+        hashes = rpc_batch([("getblockhash", [h]) for h in range(start, end + 1)], timeout=30)
+        if not hashes or None in hashes:
+            return False
+        for k in range(0, len(hashes), 100):
+            blocks = rpc_batch([("getblock", [bh, 2]) for bh in hashes[k:k + 100]], timeout=60)
+            if not blocks or None in blocks:
+                return False
+            for b in blocks:
+                new += msg_extract(b)
+        newrecent = {h: hashes[h - start] for h in range(start, end + 1)}
+    with _M_LOCK:
+        _M["items"] = sorted(_M["items"] + new, key=lambda m: (m["height"], m["i"]))[-MSG_KEEP:]
+        if newrecent:
+            r = dict(_M["recent"])
+            r.update(newrecent)
+            _M["recent"] = {h: v for h, v in r.items() if h > end - 40}
+            _M["scanned"] = end
+        _M["tip"] = tip
+        _M["ready"] = end >= tip
+    return True
+
+
+def msg_loop():
+    while True:
+        ok = False
+        try:
+            ok = msg_scan_once()
+        except Exception:
+            pass
+        with _M_LOCK:
+            busy = not _M["ready"]
+        time.sleep(0.3 if (ok and busy) else 8)
+
+
+def _is_mine(txid):
+    if txid in _MINE:
+        return _MINE[txid]
+    _, e = rpc_full("gettransaction", [txid], wallet=WALLET)
+    if e is None:
+        _MINE[txid] = True
+    elif e.get("code") == -5:
+        _MINE[txid] = False
+    else:
+        return False                                   # portefeuille indisponible : on ne retient rien
+    return _MINE[txid]
+
+
+def msg_view():
+    with _M_LOCK:
+        items, tip, ready, frm, scanned = list(_M["items"]), _M["tip"], _M["ready"], _M["from"], _M["scanned"]
+    items.sort(key=lambda m: (m["height"], m["i"]), reverse=True)
+    seen = {m["txid"] for m in items}
+    feed = [{"txid": m["txid"], "time": m["time"], "height": m["height"], "conf": max(1, tip - m["height"] + 1),
+             "text": m["text"], "mine": _is_mine(m["txid"])} for m in items[:MSG_SHOWN]]
+    pend = []
+    with _M_LOCK:
+        mine_pending = list(_MPEND)
+    for p in mine_pending:
+        if p["txid"] in seen or time.time() - p["t"] > 3 * 86400:
+            with _M_LOCK:
+                if p in _MPEND:
+                    _MPEND.remove(p)
+            continue
+        r, e = rpc_full("gettransaction", [p["txid"]], wallet=WALLET)
+        if e is not None:
+            if e.get("code") == -5:
+                with _M_LOCK:
+                    if p in _MPEND:
+                        _MPEND.remove(p)
+            continue
+        pend.append({"txid": p["txid"], "text": p["text"], "sent": p["t"], "conf": int(r.get("confirmations", 0))})
+    prog = None
+    if not ready and frm is not None and tip > frm:
+        prog = max(0.0, min(1.0, ((scanned if scanned is not None else frm) - frm + 1) / (tip - frm + 1)))
+    return {"feed": feed, "pending": pend, "ready": ready, "from": frm, "to": tip, "progress": prog}
+
+
+def msg_preview(text):
+    if not isinstance(text, str):
+        raise UserError("Message invalide.")
+    if len(text) > 4000:
+        raise UserError("Message trop long : %d caractères au plus." % MSG_MAX)
+    t = clean_msg(text)
+    if not t:
+        raise UserError("Écris un message.")
+    if len(t) > MSG_MAX:
+        raise UserError("Message trop long : %d caractères au plus (le tien en fait %d)." % (MSG_MAX, len(t)))
+    try:
+        data = MSG_MAGIC + t.encode("utf-8")
+    except UnicodeEncodeError:
+        raise UserError("Ce message contient des caractères invalides.")
+    info, _ = rpc_full("getblockchaininfo")
+    if not info:
+        raise UserError("Le nœud ne répond pas. Vérifie qu'il est démarré dans Umbrel.")
+    if info.get("headers", 0) > info.get("blocks", 0) + 1 and info.get("initialblockdownload"):
+        raise UserError("Le nœud n'est pas encore à jour : attends la fin de la synchronisation.")
+    rate = fee_rate()
+    res, e = rpc_full("walletcreatefundedpsbt",
+                      [[], [{"data": data.hex()}], 0, {"fee_rate": plain(rate), "replaceable": False}], wallet=WALLET)
+    if e:
+        raise UserError(human_error(e))
+    fee = Decimal(res["fee"])
+    now = time.time()
+    for k in [k for k, p in _PREVM.items() if now - p["t"] > 300]:
+        _PREVM.pop(k, None)
+    token = secrets.token_hex(16)
+    _PREVM[token] = {"text": t, "rate": plain(rate), "t": now}
+    return {"token": token, "text": t, "chars": len(t), "bytes": len(data), "fee": fmt_rdt(fee)}
+
+
+def _broadcast_data(data_hex, rate):
+    """Cree, signe, controle puis diffuse une transaction qui porte une donnee (OP_RETURN). Le portefeuille doit
+    etre deverrouille. La transaction n'est confiee au portefeuille qu'apres avoir ete acceptee par le noeud."""
+    r, e = rpc_full("walletcreatefundedpsbt",
+                    [[], [{"data": data_hex}], 0, {"fee_rate": rate, "replaceable": False}], wallet=WALLET)
+    if e:
+        raise UserError(human_error(e))
+    s, e = rpc_full("walletprocesspsbt", [r["psbt"], True], wallet=WALLET)
+    if e:
+        raise UserError(human_error(e))
+    f, e = rpc_full("finalizepsbt", [s["psbt"]])
+    if e or not f or not f.get("complete") or not f.get("hex"):
+        raise UserError("Le portefeuille n'a pas pu signer la transaction.")
+    raw = f["hex"]
+    t, e = rpc_full("testmempoolaccept", [[raw]])
+    if e:
+        raise UserError(human_error(e))
+    if not t or not t[0].get("allowed"):
+        raise UserError(human_error({"code": 0, "message": str((t or [{}])[0].get("reject-reason", "refusée"))}))
+    txid, e = rpc_full("sendrawtransaction", [raw])
+    if e:
+        raise UserError(human_error(e))
+    return str(txid)
+
+
+def msg_send(token, passphrase):
+    now = time.time()
+    token = str(token or "")
+    if not isinstance(passphrase, str) or len(passphrase) > 1024:
+        raise UserError("Mot de passe invalide.")
+    with _WLOCK:
+        p = _PREVM.get(token)
+        if not p or now - p["t"] > 300:
+            _PREVM.pop(token, None)
+            raise UserError("Cet aperçu a expiré ou a déjà servi. Recommence depuis le début.")
+        wi, e = rpc_full("getwalletinfo", wallet=WALLET)
+        if e:
+            raise UserError(human_error(e))
+        unlocked = False
+        if "unlocked_until" in wi:
+            recent = [t for t in _FAILS if now - t < 600]
+            _FAILS[:] = recent
+            if len(recent) >= 5:
+                raise UserError("Trop d'essais de mot de passe. Réessaie dans quelques minutes.")
+            if not passphrase:
+                raise UserError("Écris le mot de passe de ton portefeuille.")
+            _, e = rpc_full("walletpassphrase", [passphrase, 30], wallet=WALLET)
+            if e:
+                if e.get("code") == -14:
+                    _FAILS.append(now)
+                raise UserError(human_error(e))
+            unlocked = True
+        _PREVM.pop(token, None)                   # a usage unique : consomme juste avant l'envoi
+        try:
+            txid = _broadcast_data((MSG_MAGIC + p["text"].encode("utf-8")).hex(), p["rate"])
+        finally:
+            if unlocked:
+                rpc_full("walletlock", wallet=WALLET)
+    with _M_LOCK:
+        _MPEND.append({"txid": txid, "text": p["text"], "t": time.time()})
+        del _MPEND[:-20]
+    _MINE[txid] = True
     _cache["t"] = 0
     return str(txid)
 
@@ -1090,6 +1395,20 @@ details.prot{background:var(--card);border:1px solid var(--edge);border-radius:1
 details.prot summary{cursor:pointer;font-weight:700;font-size:14px;padding:12px 0 6px}
 details.prot p{margin:8px 0;font-size:13px;line-height:1.5;color:var(--mu)}
 .toast{white-space:pre-line;display:flex;gap:14px;align-items:center;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);width:min(560px,92vw);background:#16301f;border:1px solid var(--good);color:var(--tx);padding:12px 18px;border-radius:12px;font-size:14px;z-index:9;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+/* messages */
+.send textarea{width:100%;background:#0e1626;border:1px solid var(--edge);border-radius:10px;color:var(--tx);padding:12px;font:15px/1.5 Inter,system-ui,sans-serif;resize:vertical}
+.send textarea:focus{outline:none;border-color:var(--acc)}
+.msgs{background:var(--card);border:1px solid var(--edge);border-radius:14px;margin-top:10px}
+.msg{padding:13px 16px;border-bottom:1px solid rgba(46,58,80,.55)}
+.msg:last-child{border-bottom:0}
+.mtop{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.mdt{font-weight:700;font-size:13px}
+.mtxt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}
+.mtxt.mprev{background:#0e1626;border:1px solid var(--edge);border-radius:10px;padding:12px;margin:6px 0 10px}
+.mmeta{margin-top:7px;overflow-wrap:anywhere}
+.mstat{margin-top:10px}
+.badge{display:inline-block;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;border:1px solid var(--edge);color:var(--mu)}
+.badge.good{border-color:var(--good);color:var(--good)}.badge.warn{border-color:var(--warn);color:var(--warn)}.badge.bad{border-color:var(--bad);color:var(--bad)}
 footer{margin-top:34px;color:#6b7890;font-size:12px;text-align:center}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 </style></head><body><div class="wrap">
@@ -1474,6 +1793,104 @@ R.send=(rec,d)=>{
  if(rec.prev.hidden===false){rec.pwl.hidden=rec.pw.hidden=!d.encrypted;}
 };
 
+/* ---- messages */
+function fmtDt(ts){return new Date(ts*1000).toLocaleString("fr-FR",{day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});}
+R.msgs=(rec,d)=>{
+ if(!rec.el){
+  rec.el=$("section","sec");rec.el.append($("h2","","Messages dans la chaîne"));
+  const box=$("div","send");
+  rec.busy=false;rec.token=null;rec.max=d.max;rec.map=new Map();
+  const show=w=>{rec.form.hidden=w!=="form";rec.prev.hidden=w!=="prev";rec.done.hidden=w!=="done";};
+  /* 1. écrire */
+  rec.form=$("div","");
+  rec.ta=$("textarea");rec.ta.rows=4;rec.ta.placeholder="Écris un court message…";rec.ta.autocomplete="off";
+  rec.cnt=$("div","mu small");rec.wait=$("div","warn small");rec.err=$("div","ferr");
+  rec.go=$("button","btn","Vérifier avant d'écrire");
+  rec.form.append($("label","","Ton message"),rec.ta,rec.cnt,
+   $("div","mu small","Un message est public, lisible par tout le monde, et ne peut plus être effacé ni modifié. Ne mets jamais d'information personnelle, de mot de passe ou d'adresse."),
+   rec.wait,rec.go,rec.err);
+  /* 2. aperçu */
+  rec.prev=$("div","");
+  rec.ptxt=$("div","mtxt mprev");rec.prows=$("div","prows");
+  rec.pw=$("input");rec.pw.type="password";rec.pw.autocomplete="off";rec.pw.placeholder="Mot de passe du portefeuille";
+  rec.pwl=$("label","","Mot de passe du portefeuille");
+  rec.ok=$("button","btn","Écrire dans la chaîne");rec.back=$("button","btn ghost","Modifier");rec.perr=$("div","ferr");
+  const r2=$("div","btnrow");r2.append(rec.ok,rec.back);
+  rec.prev.append($("div","ptitle","Vérifie avant d'écrire"),rec.ptxt,rec.prows,
+   $("div","warn small","Une fois écrit, ce message est public et définitif : personne ne peut l'effacer, toi non plus."),rec.pwl,rec.pw,r2,rec.perr);
+  /* 3. fini */
+  rec.done=$("div","");
+  rec.dmsg=$("div","dmsg");rec.dtx=$("code","addr");
+  rec.dnote=$("div","mu small","Il apparaît ci-dessous, « en attente » d'abord, puis daté dès qu'un bloc le contient.");
+  rec.dnew=$("button","btn ghost","Écrire un autre message");
+  rec.done.append(rec.dmsg,rec.dtx,rec.dnote,rec.dnew);
+  box.append(rec.form,rec.prev,rec.done);rec.el.append(box);
+  /* 4. le fil */
+  rec.fh=$("div","ptitle","Messages trouvés dans la chaîne");
+  rec.warn=$("div","mu small","Ces messages viennent de n'importe qui : tout le monde peut écrire dans la chaîne. Ils ne sont ni vérifiés ni modérés. Seul le texte est affiché.");
+  rec.list=$("div","msgs");rec.status=$("div","mu small mstat");
+  rec.el.append(rec.fh,rec.warn,rec.list,rec.status);
+  const upd=()=>{const n=[...rec.ta.value].length;rec.cnt.textContent=n+" / "+rec.max+" caractères";rec.cnt.className="small "+(n>rec.max?"bad":"mu");
+   rec.go.disabled=rec.busy||!rec.can||n===0||n>rec.max;};
+  rec.upd=upd;rec.ta.addEventListener("input",upd);
+  const lock=b=>{rec.busy=b;rec.ok.disabled=b;rec.back.disabled=b;upd();};
+  rec.go.onclick=async()=>{
+   rec.err.textContent="";lock(true);rec.go.textContent="Vérification…";
+   const j=await post("api/msgpreview",{text:rec.ta.value});
+   rec.go.textContent="Vérifier avant d'écrire";lock(false);
+   if(!j.ok){rec.err.textContent=j.error||"Erreur.";return;}
+   rec.token=j.token;rec.ptxt.textContent=j.text;rec.prows.textContent="";
+   const row=(a,b,cls)=>{const r=$("div","prow");r.append($("span","mu",a),$("b",cls||"",b));rec.prows.append(r);};
+   row("Taille",j.chars+" caractères ("+j.bytes+" octets)");
+   row("Frais du réseau (environ)",j.fee+" RDT","big2");
+   rec.pw.value="";rec.perr.textContent="";rec.pwl.hidden=rec.pw.hidden=!rec.encrypted;
+   show("prev");if(rec.encrypted)rec.pw.focus();
+  };
+  rec.back.onclick=()=>{rec.token=null;rec.pw.value="";show("form");};
+  const confirm=async()=>{
+   if(rec.busy||!rec.token)return;
+   rec.perr.textContent="";lock(true);rec.ok.textContent="Envoi…";
+   const j=await post("api/msgsend",{token:rec.token,passphrase:rec.pw.value});
+   rec.ok.textContent="Écrire dans la chaîne";lock(false);
+   if(!j.ok){rec.perr.textContent=j.error||"Erreur.";
+    if(/expiré|déjà servi/.test(j.error||"")){rec.token=null;rec.err.textContent=j.error;rec.pw.value="";show("form");}
+    return;}
+   rec.token=null;rec.pw.value="";rec.ta.value="";upd();
+   rec.dmsg.textContent="Message envoyé ✓";rec.dtx.textContent=j.txid;show("done");poll();
+  };
+  rec.ok.onclick=confirm;rec.pw.addEventListener("keydown",e=>{if(e.key==="Enter")confirm();});
+  rec.dnew.onclick=()=>show("form");
+  show("form");upd();
+ }
+ rec.encrypted=d.encrypted;rec.can=d.can_send;
+ rec.wait.textContent=d.can_send?"":"Écriture bloquée : le nœud n'est pas encore à jour.";
+ rec.upd();
+ if(rec.prev.hidden===false){rec.pwl.hidden=rec.pw.hidden=!d.encrypted;}
+ /* le fil : d'abord les messages de cette page encore en attente, puis ceux des blocs */
+ const pend=new Set(d.pending.map(p=>p.txid));
+ const all=d.pending.map(p=>({txid:p.txid,text:p.text,mine:true,time:null,height:null,conf:p.conf}))
+  .concat(d.feed.filter(m=>!pend.has(m.txid)));
+ const seen=new Set(),els=[];
+ all.forEach(m=>{
+  let r=rec.map.get(m.txid);
+  if(!r){r={el:$("div","msg"),top:$("div","mtop"),txt:$("div","mtxt"),meta:$("div","mmeta mu small"),dt:$("span","mdt"),bd:$("span","badge")};
+   r.top.append(r.dt,r.bd);r.el.append(r.top,r.txt,r.meta);rec.map.set(m.txid,r);}
+  r.txt.textContent=m.text;
+  if(m.time){r.dt.textContent=fmtDt(m.time);r.bd.textContent=m.conf+" confirmation"+(m.conf>1?"s":"");r.bd.className="badge good";}
+  else{r.dt.textContent=m.conf>0?"Confirmé, lecture en cours":"En attente d'un bloc";r.bd.textContent=m.conf>0?"confirmé":"en attente";r.bd.className="badge warn";}
+  r.meta.textContent=(m.mine?"Écrit depuis ton portefeuille · ":"")+(m.height!=null?"bloc "+m.height+" · ":"")+m.txid.slice(0,10)+"…"+m.txid.slice(-6);
+  r.meta.title=m.txid;
+  seen.add(m.txid);els.push(r.el);
+ });
+ for(const [k,r] of rec.map)if(!seen.has(k)){r.el.remove();rec.map.delete(k);}
+ if(!rec.empty)rec.empty=$("div","empty");
+ rec.empty.remove();
+ if(!els.length){rec.empty.textContent=d.ready?"Aucun message dans les derniers blocs lus.":"Lecture de la chaîne en cours…";rec.list.append(rec.empty);}
+ else order(rec.list,els);
+ if(d.ready)rec.status.textContent=d.from!=null?"Messages cherchés dans les blocs "+d.from+" à "+d.to+".":"";
+ else rec.status.textContent="Lecture de la chaîne en cours… "+(d.progress!=null?Math.round(d.progress*100)+" %":"");
+};
+
 function render(state){
  const root=document.getElementById("root"),keep=new Set(),els=[];
  state.sections.forEach(d=>{
@@ -1532,7 +1949,8 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if VIEW != "wallet" or path not in ("/api/preview", "/api/send", "/api/newaddress", "/api/encrypt", "/api/backup"):
+        if VIEW != "wallet" or path not in ("/api/preview", "/api/send", "/api/newaddress", "/api/encrypt", "/api/backup",
+                                         "/api/msgpreview", "/api/msgsend"):
             return self._send(404, b"not found", "text/plain")
         # une page d'un autre site ne doit pas pouvoir declencher un envoi : JSON obligatoire (ce qui force une
         # verification du navigateur que ce serveur ne l'autorise jamais) et refus des requetes inter-sites
@@ -1542,7 +1960,7 @@ class H(BaseHTTPRequestHandler):
             return self._json(415, {"ok": False, "error": "Requête refusée."})
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            if not 0 < n <= 4096:
+            if not 0 < n <= 16384:
                 raise ValueError
             data = json.loads(self.rfile.read(n).decode("utf-8"))
             if not isinstance(data, dict):
@@ -1558,6 +1976,10 @@ class H(BaseHTTPRequestHandler):
                 out = wallet_encrypt(data.get("pass1"), data.get("pass2"), data.get("ack"))
             elif path == "/api/backup":
                 out = {"backup": wallet_backup()}
+            elif path == "/api/msgpreview":
+                out = msg_preview(data.get("text"))
+            elif path == "/api/msgsend":
+                out = {"txid": msg_send(data.get("token"), data.get("passphrase", ""))}
             else:
                 out = {"address": wallet_new_address()}
             self._json(200, dict(out, ok=True))
@@ -1573,4 +1995,6 @@ class H(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if VIEW != "wallet":
         threading.Thread(target=wallet_loop, daemon=True).start()
+    else:
+        threading.Thread(target=msg_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

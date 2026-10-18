@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-wallet
 category: bitcoin
 name: Radthal Wallet
-version: "1.0.0"
+version: "1.0.1"
 tagline: Recevoir et envoyer des RDT depuis ton noeud
 description: >-
   Portefeuille Radthal : le solde du portefeuille de ton noeud, une adresse de reception avec QR code, l'envoi de RDT vers n'importe quelle adresse Radthal (apercu puis confirmation, mot de passe optionnel) et l'historique des operations. Les cles restent dans le noeud, cette page ne les voit jamais.
 releaseNotes: >-
-  Premiere version.
+  Moins de charge sur le noeud avec un tres gros portefeuille.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

@@ -566,6 +566,7 @@ SAT = Decimal("0.00000001")
 _WLOCK = threading.Lock()      # un seul envoi / changement d'adresse a la fois
 _PREV = {}                     # jeton d'apercu -> {addr, amount, all, rate, t}
 _FAILS = []                    # instants des mots de passe refuses (limite : 5 en 10 minutes)
+_USED = {"addr": None, "t": 0.0, "v": False}
 
 
 class UserError(Exception):
@@ -756,8 +757,12 @@ def view_wallet():
     addr = current_receive()
     used = False
     if addr:
-        got, e = rpc_full("getreceivedbyaddress", [addr, 0], wallet=WALLET)
-        used = bool(got) and Decimal(got) > 0
+        # getreceivedbyaddress relit tout le portefeuille : sur un portefeuille de centaines de milliers de
+        # transactions c'est lourd, donc on ne le redemande qu'une fois par minute (ou si l'adresse change)
+        if _USED["addr"] != addr or time.time() - _USED["t"] > 60:
+            got, e = rpc_full("getreceivedbyaddress", [addr, 0], wallet=WALLET)
+            _USED.update(addr=addr, t=time.time(), v=bool(got) and Decimal(got) > 0)
+        used = _USED["v"]
     secs.append({"id": "receive", "type": "receive", "address": addr, "used": used})
     secs.append({"id": "send", "type": "send", "encrypted": encrypted, "can_send": synced,
                  "spendable": fmt_rdt(trusted), "rate": plain(fee_rate())})
@@ -935,7 +940,8 @@ def build_state():
 
 def get_state():
     with _lock:
-        if _cache["data"] is None or time.time() - _cache["t"] > 2.0:
+        # la page portefeuille interroge un portefeuille qui peut etre tres gros : on la rafraichit moins souvent
+        if _cache["data"] is None or time.time() - _cache["t"] > (6.0 if VIEW == "wallet" else 2.0):
             _cache["data"] = build_state()
             _cache["t"] = time.time()
         return _cache["data"]

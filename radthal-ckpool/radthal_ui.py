@@ -41,6 +41,27 @@ def rpc(method, params=None, wallet=None, timeout=3):
         return None
 
 
+def rpc_batch(calls, wallet=None, timeout=60):
+    """Plusieurs appels RPC dans UNE requete HTTP. Renvoie la liste des resultats (None = cet appel a echoue),
+    ou None si la requete entiere echoue."""
+    try:
+        pw = open(PASSFILE).read().strip()
+        auth = "Basic " + base64.b64encode((RPCUSER + ":" + pw).encode()).decode()
+        url = RPC + ("/wallet/" + wallet if wallet else "")
+        body = json.dumps([{"jsonrpc": "1.0", "id": i, "method": m, "params": p}
+                           for i, (m, p) in enumerate(calls)]).encode()
+        req = urllib.request.Request(url, body, {"Content-Type": "application/json", "Authorization": auth})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+        out = [None] * len(calls)
+        for d in data:
+            if d.get("error") is None:
+                out[d["id"]] = d.get("result")
+        return out
+    except Exception:
+        return None
+
+
 _BLK = {}          # hash -> bloc (immuable, donc mis en cache)
 _BLK_LOCK = threading.Lock()
 
@@ -75,7 +96,7 @@ def recent_blocks(n=14):
     return out
 
 
-_W = {"mined": {}, "light": False, "scanned": False}
+_W = {"mined": {}, "light": False, "scanned": False, "retry_at": 0.0}
 _W_LOCK = threading.Lock()
 FULL_SCAN = VIEW in ("dashboard", "ckpool")     # seules ces pages affichent le total de blocs trouves
 
@@ -96,9 +117,45 @@ def _wallet_apply(txs, mined):
             mined.pop(bh, None)
 
 
+def chain_scan(tip, step=200):
+    """Blocs de la meilleure chaine dont la recompense va a ce portefeuille.
+    On lit la CHAINE par paquets de `step` blocs (petites requetes groupees) au lieu de demander tout le portefeuille
+    au noeud : listtransactions sur un portefeuille de centaines de milliers de transactions fait gonfler le noeud
+    de plusieurs Go. Ici, la memoire du noeud reste petite quelle que soit la taille du portefeuille."""
+    found, known = {}, {}
+    for lo in range(1, tip + 1, step):                 # le bloc 0 (genesis) n'a pas de transaction lisible
+        hs = list(range(lo, min(lo + step, tip + 1)))
+        hashes = rpc_batch([("getblockhash", [h]) for h in hs])
+        if not hashes or None in hashes:
+            return None
+        blocks = rpc_batch([("getblock", [bh, 1]) for bh in hashes])
+        if not blocks or None in blocks:
+            return None
+        cbs = rpc_batch([("getrawtransaction", [b["tx"][0], True, b["hash"]]) for b in blocks])
+        if not cbs or None in cbs:
+            return None
+        todo = []
+        for cb in cbs:
+            for o in cb.get("vout", []):
+                a = (o.get("scriptPubKey") or {}).get("address")
+                if a and a not in known and a not in todo:
+                    todo.append(a)
+        if todo:
+            res = rpc_batch([("getaddressinfo", [a]) for a in todo], wallet=WALLET)
+            if res is None or None in res:              # portefeuille absent ou noeud occupe : on recommencera plus tard
+                return None
+            for a, r in zip(todo, res):
+                known[a] = bool(r and r.get("ismine"))
+        for h, bh, cb in zip(hs, hashes, cbs):
+            if any(known.get((o.get("scriptPubKey") or {}).get("address")) for o in cb.get("vout", [])):
+                found[bh] = {"blockhash": bh, "amount": None, "confirmations": tip - h + 1, "blockheight": h}
+        time.sleep(0.02)                                # laisse respirer le noeud
+    return found
+
+
 def wallet_refresh():
     """1) les 200 dernieres transactions (rapide) : sert a marquer tes blocs ;
-    2) une seule fois, tout le portefeuille en UN appel (plusieurs appels par pages seraient bien plus lourds)."""
+    2) une seule fois, la chaine entiere par petits paquets (voir chain_scan) pour compter tous tes blocs."""
     txs = rpc("listtransactions", ["*", 200, 0], wallet=WALLET)
     if txs is None:
         return
@@ -107,13 +164,15 @@ def wallet_refresh():
         _W["light"] = True
         if not FULL_SCAN:
             _W["scanned"] = True
-    if FULL_SCAN and not _W["scanned"]:
-        allt = rpc("listtransactions", ["*", 10000000, 0], wallet=WALLET, timeout=120)
-        if allt is None:
+    if FULL_SCAN and not _W["scanned"] and time.time() >= _W["retry_at"]:
+        info = rpc("getblockchaininfo")
+        try:
+            mined = chain_scan(info["blocks"]) if info and info.get("blocks") else None
+        except Exception:
+            mined = None
+        if mined is None:
+            _W["retry_at"] = time.time() + 60            # on reessaiera dans une minute, sans harceler le noeud
             return
-        mined = {}
-        _wallet_apply(allt, mined)
-        del allt
         with _W_LOCK:
             mined.update(_W["mined"])        # les infos les plus fraiches gagnent
             _W["mined"], _W["scanned"] = mined, True
@@ -136,7 +195,7 @@ def wallet_blocks():
 
 def found_card(mine, sub="par ce portefeuille"):
     if not _W["scanned"]:
-        return card("found", "Blocs trouvés", value="calcul…", sub="lecture du portefeuille (une fois, ça peut prendre une minute)")
+        return card("found", "Blocs trouvés", value="calcul…", sub="lecture de la chaîne (une fois, ça peut prendre une minute)")
     return card("found", "Blocs trouvés", num=len(mine), sub=sub, accent=len(mine) > 0)
 
 

@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-dashboard
 category: bitcoin
 name: Radthal Dashboard
-version: "1.3.0"
+version: "1.3.1"
 tagline: Vue d'ensemble de Radthal
 description: >-
   Vue d'ensemble de la chaine Radthal : blocs, difficulte, puissance du reseau, solde du portefeuille, mempool et mineurs ckpool.
 releaseNotes: >-
-  Explorateur de blocs : clique sur un bloc pour voir ce qu'il contient (transactions, recompense, messages), barre de recherche (numero de bloc, hash ou transaction) et liste de tes blocs trouves. Aussi : voyant Surveillance des forks et valeurs conseillees pour la prochaine version du noeud.
+  Correctif : la page ne ralentit plus sur une chaine qui a beaucoup de branches orphelines. Le voyant Surveillance des forks calcule maintenant en arriere-plan, rarement, et ne fait plus attendre l'affichage ni travailler le noeud sans arret.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

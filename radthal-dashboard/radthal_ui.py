@@ -402,9 +402,12 @@ def miner_section(st, workers, nethash):
 
 FORK_WINDOW = 144     # on ne regarde que les branches des 144 derniers blocs (environ une journee)
 REF_DEPTH = 1000      # le bloc de reference conseille est environ 1 000 blocs sous la tete
-_FK = {"t": 0.0, "h": None, "sec": None, "seen": {}}
 AHEAD_DELAY = 30      # une annonce de chaine plus longue ne compte qu'apres 30 s (sinon on voit un faux clignotement a chaque nouveau bloc)
-_FK_LOCK = threading.Lock()
+FORK_EVERY = int(os.environ.get("FORK_EVERY", "120"))   # getchaintips lit TOUTES les branches du noeud : sur une longue chaine il prend
+FORK_MIN = int(os.environ.get("FORK_MIN", "30"))        # plusieurs secondes et bloque le noeud. On l'appelle rarement, en arriere-plan.
+_FK = {"sec": None, "seen": {}, "busy": False, "last": 0.0, "key": None, "ok_t": 0.0, "fail": 0, "soon": False, "dur": None}
+_FK_LOCK = threading.Lock()     # protege les valeurs conseillees (advice_cached)
+_FKT_LOCK = threading.Lock()    # protege l'etat de l'analyse des forks (jamais tenu pendant un appel au noeud)
 
 
 def _when(bh):
@@ -427,7 +430,7 @@ def fork_section(info):
     Un noeud ne telecharge pas toujours les blocs d'une branche de meme force : on lit donc aussi les branches
     dont il ne connait que les en-tetes (statuts headers-only et valid-headers)."""
     h = info.get("blocks")
-    tips = rpc("getchaintips")
+    tips = rpc("getchaintips", timeout=120)        # lent sur une longue chaine : on laisse le temps au noeud
     if h is None or not isinstance(tips, list):
         return None
     live, past, invalid, ahead, seen = [], [], [], [], {}
@@ -449,6 +452,7 @@ def fork_section(info):
         else:
             past.append(t)
     _FK["seen"] = seen
+    _FK["soon"] = any(time.time() - v < AHEAD_DELAY for v in seen.values())   # a revoir des que le delai est passe
     lines, state = [], "ok"
     rank = {"ok": 0, "warn": 1, "bad": 2}
 
@@ -496,11 +500,48 @@ def fork_section(info):
     return {"id": "fork", "type": "fork", "state": state, "label": label, "detail": detail, "lines": lines}
 
 
+def _fork_worker(info):
+    t0 = time.time()
+    try:
+        sec = fork_section(info)
+    except Exception:
+        sec = None
+    with _FKT_LOCK:
+        _FK["busy"], _FK["dur"] = False, time.time() - t0
+        if sec is not None:
+            _FK["sec"], _FK["ok_t"], _FK["fail"] = sec, time.time(), 0
+        else:
+            _FK["fail"] += 1
+
+
+def fork_wait(failed):
+    """Section neutre (voyant gris) tant qu'aucune analyse n'a abouti."""
+    if failed:
+        label, detail = "Analyse des forks indisponible", "Le nœud n'a pas répondu à temps. Nouvel essai dans un instant."
+    else:
+        label, detail = "Surveillance des forks", "Première analyse en cours : sur une longue chaîne, elle prend quelques secondes."
+    return {"id": "fork", "type": "fork", "state": "wait", "label": label, "detail": detail, "lines": []}
+
+
 def fork_cached(info):
-    with _FK_LOCK:
-        if time.time() - _FK["t"] > 15 or _FK["sec"] is None or _FK["h"] != info.get("blocks"):
-            _FK["sec"], _FK["t"], _FK["h"] = fork_section(info), time.time(), info.get("blocks")
-        return _FK["sec"]
+    """Ne fait JAMAIS attendre la page : l'analyse tourne en arriere-plan, une seule a la fois, toutes les FORK_EVERY
+    secondes, ou des qu'un nouveau bloc arrive (au plus toutes les FORK_MIN secondes). La page recoit toujours le dernier
+    resultat connu ; sans resultat de moins de 10 minutes, elle affiche un voyant gris plutot qu'un faux « tout va bien »."""
+    key = (info.get("blocks"), info.get("bestblockhash"))
+    now = time.time()
+    with _FKT_LOCK:
+        if not _FK["busy"]:
+            gap = now - _FK["last"]
+            dur = _FK["dur"] or 0
+            every, lo = max(FORK_EVERY, 30 * dur), max(FORK_MIN, 10 * dur)    # une analyse lente est espacee : le noeud reste libre >90 % du temps
+            if (_FK["last"] == 0.0 or gap >= every or (key != _FK["key"] and gap >= lo)
+                    or (_FK["soon"] and gap >= AHEAD_DELAY + 2) or (_FK["fail"] and gap >= lo)):
+                _FK["busy"], _FK["last"], _FK["key"] = True, now, key
+                threading.Thread(target=_fork_worker, args=(dict(info),), daemon=True).start()
+        sec, ok_t, fail = _FK["sec"], _FK["ok_t"], _FK["fail"]
+    if sec is None or now - ok_t > 600:
+        return fork_wait(fail > 0)
+    return sec
 
 
 _AV = {"t": 0.0, "ref": None, "sec": None}

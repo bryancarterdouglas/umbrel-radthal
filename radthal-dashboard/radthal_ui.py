@@ -403,9 +403,9 @@ def miner_section(st, workers, nethash):
 FORK_WINDOW = 144     # on ne regarde que les branches des 144 derniers blocs (environ une journee)
 REF_DEPTH = 1000      # le bloc de reference conseille est environ 1 000 blocs sous la tete
 AHEAD_DELAY = 30      # une annonce de chaine plus longue ne compte qu'apres 30 s (sinon on voit un faux clignotement a chaque nouveau bloc)
-FORK_EVERY = int(os.environ.get("FORK_EVERY", "120"))   # getchaintips lit TOUTES les branches du noeud : sur une longue chaine il prend
-FORK_MIN = int(os.environ.get("FORK_MIN", "30"))        # plusieurs secondes et bloque le noeud. On l'appelle rarement, en arriere-plan.
-_FK = {"sec": None, "seen": {}, "busy": False, "last": 0.0, "key": None, "ok_t": 0.0, "fail": 0, "soon": False, "dur": None}
+FORK_EVERY = int(os.environ.get("FORK_EVERY", "1800"))   # getchaintips renvoie TOUTES les branches que le noeud a connues (sur ta chaine :
+FORK_MIN = int(os.environ.get("FORK_MIN", "300"))       # plus de 470 000) : on l'appelle rarement, en arriere-plan, et on lit la reponse en flux.
+_FK = {"sec": None, "busy": False, "last": 0.0, "key": None, "ok_t": 0.0, "fail": 0, "dur": None, "n": None, "ahead_since": None}
 _FK_LOCK = threading.Lock()     # protege les valeurs conseillees (advice_cached)
 _FKT_LOCK = threading.Lock()    # protege l'etat de l'analyse des forks (jamais tenu pendant un appel au noeud)
 
@@ -422,18 +422,73 @@ def _ago(s):
     return "il y a " + dur(s)
 
 
+_TIP_RE = re.compile(rb'\{"height":(\d+),"hash":"([0-9a-f]{64})","branchlen":(\d+),"status":"([a-z-]+)"\}')
+
+
+def chaintips_recent(min_height, timeout=180):
+    """getchaintips renvoie TOUTES les branches connues du noeud : sur la chaine Radthal, plus de 470 000 (surtout d'anciens
+    blocs orphelins), soit une reponse de ~90 Mo. On la lit par morceaux d'1 Mo et on ne garde que les branches recentes
+    (et la branche principale) : la liste entiere n'est jamais construite en memoire. None si le noeud ne repond pas."""
+    try:
+        pw = open(PASSFILE).read().strip()
+        auth = "Basic " + base64.b64encode((RPCUSER + ":" + pw).encode()).decode()
+        body = json.dumps({"jsonrpc": "1.0", "id": "u", "method": "getchaintips", "params": []}).encode()
+        req = urllib.request.Request(RPC, body, {"Content-Type": "application/json", "Authorization": auth})
+        out, total, buf, raw = [], 0, b"", b""
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                if raw is not None:                       # petite reponse : on la garde pour un secours si le format change
+                    raw += chunk
+                    if len(raw) > (4 << 20):
+                        raw = None
+                buf += chunk
+                last = 0
+                for m in _TIP_RE.finditer(buf):
+                    last = m.end()
+                    total += 1
+                    ht, st = int(m.group(1)), m.group(4).decode()
+                    if st == "active" or ht >= min_height:
+                        out.append({"height": ht, "hash": m.group(2).decode(), "branchlen": int(m.group(3)), "status": st})
+                buf = buf[last:]
+        if total == 0 and raw:
+            res = json.loads(raw).get("result")
+            return res if isinstance(res, list) else None
+        _FK["n"] = total
+        return out
+    except Exception:
+        return None
+
+
+def fork_tips(h):
+    return chaintips_recent(max(0, h - FORK_WINDOW))
+
+
+def _fork_finish(state, lines):
+    if state == "ok":
+        label = "Aucun fork détecté"
+        detail = "Les %d derniers blocs forment une seule chaîne." % FORK_WINDOW if not lines else "Aucun fork en cours."
+    elif state == "warn":
+        label = "Fork possible : patiente"
+        detail = "Attends quelques blocs avant d'accepter un paiement important."
+    else:
+        label = "Fork détecté : prudence"
+        detail = "N'accepte aucun paiement important avant d'avoir compris ce qui se passe, et préviens les autres propriétaires de nœuds Radthal."
+    return {"id": "fork", "type": "fork", "state": state, "label": label, "detail": detail, "lines": lines}
+
+
 def fork_section(info):
-    """Voyant « fork detecte » : cherche dans le noeud (getchaintips) des branches concurrentes de ta chaine.
+    """Voyant « fork detecte » : cherche dans le noeud (getchaintips, lu en flux) des branches concurrentes de ta chaine.
     - vert   : une seule chaine (un simple bloc orphelin du passe reste vert, avec une phrase d'explication) ;
-    - orange : branche concurrente a la hauteur de ta chaine, chaine plus longue annoncee, ou branche de 2 a 5 blocs ;
-    - rouge  : branche invalide rejetee, ou branche concurrente de 6 blocs ou plus.
-    Un noeud ne telecharge pas toujours les blocs d'une branche de meme force : on lit donc aussi les branches
-    dont il ne connait que les en-tetes (statuts headers-only et valid-headers)."""
+    - orange : branche concurrente a la hauteur de ta chaine, ou branche de 2 a 5 blocs (chaine plus longue annoncee : fork_ahead) ;
+    - rouge  : branche invalide rejetee, ou branche concurrente de 6 blocs ou plus."""
     h = info.get("blocks")
-    tips = rpc("getchaintips", timeout=120)        # lent sur une longue chaine : on laisse le temps au noeud
+    tips = fork_tips(h) if h is not None else None
     if h is None or not isinstance(tips, list):
         return None
-    live, past, invalid, ahead, seen = [], [], [], [], {}
+    live, past, invalid = [], [], []
     for t in tips:
         st, th = t.get("status"), t.get("height")
         if st == "active" or th is None or th < h - FORK_WINDOW:
@@ -441,18 +496,12 @@ def fork_section(info):
         if st == "invalid":
             invalid.append(t)
         elif th > h:
-            if st == "valid-fork":
-                live.append(t)
-            elif not info.get("initialblockdownload"):
-                seen[t.get("hash")] = _FK["seen"].get(t.get("hash"), time.time())
-                if time.time() - seen[t.get("hash")] >= AHEAD_DELAY:
-                    ahead.append(t)
+            if st == "valid-fork":                 # bloc complet plus haut que le tien, sur une autre branche
+                live.append(t)                     # (les simples en-tetes plus hauts : voir fork_ahead)
         elif th == h:
             live.append(t)
         else:
             past.append(t)
-    _FK["seen"] = seen
-    _FK["soon"] = any(time.time() - v < AHEAD_DELAY for v in seen.values())   # a revoir des que le delai est passe
     lines, state = [], "ok"
     rank = {"ok": 0, "warn": 1, "bad": 2}
 
@@ -468,10 +517,6 @@ def fork_section(info):
         raise_to("bad" if t["branchlen"] >= 6 else "warn")
         lines.append("Une branche concurrente de %s est arrivée à la hauteur de ta chaîne (bloc %s). "
                      "Elle se règle normalement au prochain bloc." % (plural(t["branchlen"], "bloc"), fr_int(t["height"])))
-    for t in ahead:
-        raise_to("warn")
-        lines.append("Des pairs annoncent une chaîne plus longue que la tienne (bloc %s contre %s) : "
-                     "ton nœud est peut-être en retard ou sur une autre branche." % (fr_int(t["height"]), fr_int(h)))
     one, deep = [], []
     for t in sorted(past, key=lambda x: -x["height"]):
         (deep if t["branchlen"] >= 2 else one).append(t)
@@ -488,16 +533,24 @@ def fork_section(info):
         lines.append("%s orphelin%s dans les %d derniers blocs (le dernier au bloc %s, %s). Sans gravité : "
                      "deux blocs ont été trouvés en même temps, un seul est resté."
                      % (plural(len(one), "bloc"), "s" if len(one) > 1 else "", FORK_WINDOW, fr_int(t["height"]), _ago(_when(t.get("hash")))))
-    if state == "ok":
-        label = "Aucun fork détecté"
-        detail = "Les %d derniers blocs forment une seule chaîne." % FORK_WINDOW if not lines else "Aucun fork en cours."
-    elif state == "warn":
-        label = "Fork possible : patiente"
-        detail = "Attends quelques blocs avant d'accepter un paiement important."
-    else:
-        label = "Fork détecté : prudence"
-        detail = "N'accepte aucun paiement important avant d'avoir compris ce qui se passe, et préviens les autres propriétaires de nœuds Radthal."
-    return {"id": "fork", "type": "fork", "state": state, "label": label, "detail": detail, "lines": lines}
+    return _fork_finish(state, lines)
+
+
+def fork_ahead(info):
+    """Chaine plus longue annoncee par des pairs : lu sur getblockchaininfo (instantane). Le nombre d'en-tetes depasse celui
+    des blocs. Ne compte qu'apres AHEAD_DELAY secondes (sinon faux clignotement a chaque nouveau bloc) et jamais pendant
+    le telechargement initial. Renvoie la phrase a afficher, ou None."""
+    h, hd = info.get("blocks"), info.get("headers")
+    with _FKT_LOCK:
+        if h is None or hd is None or hd <= h or info.get("initialblockdownload"):
+            _FK["ahead_since"] = None
+            return None
+        if _FK["ahead_since"] is None:
+            _FK["ahead_since"] = time.time()
+        if time.time() - _FK["ahead_since"] < AHEAD_DELAY:
+            return None
+    return ("Des pairs annoncent une chaîne plus longue que la tienne (bloc %s contre %s) : "
+            "ton nœud est peut-être en retard ou sur une autre branche." % (fr_int(hd), fr_int(h)))
 
 
 def _fork_worker(info):
@@ -524,23 +577,26 @@ def fork_wait(failed):
 
 
 def fork_cached(info):
-    """Ne fait JAMAIS attendre la page : l'analyse tourne en arriere-plan, une seule a la fois, toutes les FORK_EVERY
-    secondes, ou des qu'un nouveau bloc arrive (au plus toutes les FORK_MIN secondes). La page recoit toujours le dernier
-    resultat connu ; sans resultat de moins de 10 minutes, elle affiche un voyant gris plutot qu'un faux « tout va bien »."""
+    """Ne fait JAMAIS attendre la page : l'analyse des branches (lourde) tourne en arriere-plan, une seule a la fois, toutes
+    les FORK_EVERY secondes, ou apres un nouveau bloc (au plus toutes les FORK_MIN secondes), plus rarement encore si elle
+    est lente. La chaine plus longue annoncee est lue, elle, a chaque affichage (fork_ahead). Sans analyse recente, la page
+    affiche un voyant gris plutot qu'un faux « tout va bien »."""
     key = (info.get("blocks"), info.get("bestblockhash"))
     now = time.time()
+    dur = _FK["dur"] or 0
+    every, lo = max(FORK_EVERY, 30 * dur), max(FORK_MIN, 10 * dur)
     with _FKT_LOCK:
         if not _FK["busy"]:
             gap = now - _FK["last"]
-            dur = _FK["dur"] or 0
-            every, lo = max(FORK_EVERY, 30 * dur), max(FORK_MIN, 10 * dur)    # une analyse lente est espacee : le noeud reste libre >90 % du temps
-            if (_FK["last"] == 0.0 or gap >= every or (key != _FK["key"] and gap >= lo)
-                    or (_FK["soon"] and gap >= AHEAD_DELAY + 2) or (_FK["fail"] and gap >= lo)):
+            if _FK["last"] == 0.0 or gap >= every or (key != _FK["key"] and gap >= lo) or (_FK["fail"] and gap >= lo):
                 _FK["busy"], _FK["last"], _FK["key"] = True, now, key
                 threading.Thread(target=_fork_worker, args=(dict(info),), daemon=True).start()
         sec, ok_t, fail = _FK["sec"], _FK["ok_t"], _FK["fail"]
-    if sec is None or now - ok_t > 600:
-        return fork_wait(fail > 0)
+    ah = fork_ahead(info)
+    if sec is None or now - ok_t > max(600, 3 * every):
+        return _fork_finish("warn", [ah]) if ah else fork_wait(fail > 0)
+    if ah:
+        return _fork_finish("bad" if sec["state"] == "bad" else "warn", [ah] + sec["lines"])
     return sec
 
 

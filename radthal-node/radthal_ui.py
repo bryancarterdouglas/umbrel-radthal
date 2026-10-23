@@ -4,10 +4,11 @@ Un seul fichier, aucune dependance (Python 3 seulement). Le serveur lit le noeud
 fichiers de ckpool, et sert :
   /           la page (HTML + CSS + JS, style anime comme la video de presentation)
   /api/state  les donnees de la vue choisie par la variable VIEW, en JSON
+  /api/search, /api/block, /api/mine   l'explorateur de blocs (lecture seule)
 
 La page interroge /api/state toutes les 3 secondes et met l'affichage a jour sans recharger.
 """
-import base64, glob, json, math, os, re, threading, time, urllib.request
+import base64, glob, json, math, os, re, threading, time, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VIEW = os.environ.get("VIEW", "dashboard")
@@ -37,6 +38,27 @@ def rpc(method, params=None, wallet=None, timeout=3):
         req = urllib.request.Request(url, body, {"Content-Type": "application/json", "Authorization": auth})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)["result"]
+    except Exception:
+        return None
+
+
+def rpc_batch(calls, wallet=None, timeout=60):
+    """Plusieurs appels RPC dans UNE requete HTTP. Renvoie la liste des resultats (None = cet appel a echoue),
+    ou None si la requete entiere echoue."""
+    try:
+        pw = open(PASSFILE).read().strip()
+        auth = "Basic " + base64.b64encode((RPCUSER + ":" + pw).encode()).decode()
+        url = RPC + ("/wallet/" + wallet if wallet else "")
+        body = json.dumps([{"jsonrpc": "1.0", "id": i, "method": m, "params": p}
+                           for i, (m, p) in enumerate(calls)]).encode()
+        req = urllib.request.Request(url, body, {"Content-Type": "application/json", "Authorization": auth})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+        out = [None] * len(calls)
+        for d in data:
+            if d.get("error") is None:
+                out[d["id"]] = d.get("result")
+        return out
     except Exception:
         return None
 
@@ -75,7 +97,7 @@ def recent_blocks(n=14):
     return out
 
 
-_W = {"mined": {}, "light": False, "scanned": False}
+_W = {"mined": {}, "light": False, "scanned": False, "retry_at": 0.0}
 _W_LOCK = threading.Lock()
 FULL_SCAN = VIEW in ("dashboard", "ckpool")     # seules ces pages affichent le total de blocs trouves
 
@@ -96,9 +118,45 @@ def _wallet_apply(txs, mined):
             mined.pop(bh, None)
 
 
+def chain_scan(tip, step=200):
+    """Blocs de la meilleure chaine dont la recompense va a ce portefeuille.
+    On lit la CHAINE par paquets de `step` blocs (petites requetes groupees) au lieu de demander tout le portefeuille
+    au noeud : listtransactions sur un portefeuille de centaines de milliers de transactions fait gonfler le noeud
+    de plusieurs Go. Ici, la memoire du noeud reste petite quelle que soit la taille du portefeuille."""
+    found, known = {}, {}
+    for lo in range(1, tip + 1, step):                 # le bloc 0 (genesis) n'a pas de transaction lisible
+        hs = list(range(lo, min(lo + step, tip + 1)))
+        hashes = rpc_batch([("getblockhash", [h]) for h in hs])
+        if not hashes or None in hashes:
+            return None
+        blocks = rpc_batch([("getblock", [bh, 1]) for bh in hashes])
+        if not blocks or None in blocks:
+            return None
+        cbs = rpc_batch([("getrawtransaction", [b["tx"][0], True, b["hash"]]) for b in blocks])
+        if not cbs or None in cbs:
+            return None
+        todo = []
+        for cb in cbs:
+            for o in cb.get("vout", []):
+                a = (o.get("scriptPubKey") or {}).get("address")
+                if a and a not in known and a not in todo:
+                    todo.append(a)
+        if todo:
+            res = rpc_batch([("getaddressinfo", [a]) for a in todo], wallet=WALLET)
+            if res is None or None in res:              # portefeuille absent ou noeud occupe : on recommencera plus tard
+                return None
+            for a, r in zip(todo, res):
+                known[a] = bool(r and r.get("ismine"))
+        for h, bh, cb in zip(hs, hashes, cbs):
+            if any(known.get((o.get("scriptPubKey") or {}).get("address")) for o in cb.get("vout", [])):
+                found[bh] = {"blockhash": bh, "amount": None, "confirmations": tip - h + 1, "blockheight": h}
+        time.sleep(0.02)                                # laisse respirer le noeud
+    return found
+
+
 def wallet_refresh():
     """1) les 200 dernieres transactions (rapide) : sert a marquer tes blocs ;
-    2) une seule fois, tout le portefeuille en UN appel (plusieurs appels par pages seraient bien plus lourds)."""
+    2) une seule fois, la chaine entiere par petits paquets (voir chain_scan) pour compter tous tes blocs."""
     txs = rpc("listtransactions", ["*", 200, 0], wallet=WALLET)
     if txs is None:
         return
@@ -107,13 +165,15 @@ def wallet_refresh():
         _W["light"] = True
         if not FULL_SCAN:
             _W["scanned"] = True
-    if FULL_SCAN and not _W["scanned"]:
-        allt = rpc("listtransactions", ["*", 10000000, 0], wallet=WALLET, timeout=120)
-        if allt is None:
+    if FULL_SCAN and not _W["scanned"] and time.time() >= _W["retry_at"]:
+        info = rpc("getblockchaininfo")
+        try:
+            mined = chain_scan(info["blocks"]) if info and info.get("blocks") else None
+        except Exception:
+            mined = None
+        if mined is None:
+            _W["retry_at"] = time.time() + 60            # on reessaiera dans une minute, sans harceler le noeud
             return
-        mined = {}
-        _wallet_apply(allt, mined)
-        del allt
         with _W_LOCK:
             mined.update(_W["mined"])        # les infos les plus fraiches gagnent
             _W["mined"], _W["scanned"] = mined, True
@@ -136,7 +196,7 @@ def wallet_blocks():
 
 def found_card(mine, sub="par ce portefeuille"):
     if not _W["scanned"]:
-        return card("found", "Blocs trouvés", value="calcul…", sub="lecture du portefeuille (une fois, ça peut prendre une minute)")
+        return card("found", "Blocs trouvés", value="calcul…", sub="lecture de la chaîne (une fois, ça peut prendre une minute)")
     return card("found", "Blocs trouvés", num=len(mine), sub=sub, accent=len(mine) > 0)
 
 
@@ -337,6 +397,391 @@ def miner_section(st, workers, nethash):
             "tries": tries_text(h1), "workers": online, "lastshare": last or None}
 
 
+
+# ---------------------------------------------------------------- surveillance des forks
+
+FORK_WINDOW = 144     # on ne regarde que les branches des 144 derniers blocs (environ une journee)
+REF_DEPTH = 1000      # le bloc de reference conseille est environ 1 000 blocs sous la tete
+_FK = {"t": 0.0, "h": None, "sec": None, "seen": {}}
+AHEAD_DELAY = 30      # une annonce de chaine plus longue ne compte qu'apres 30 s (sinon on voit un faux clignotement a chaque nouveau bloc)
+_FK_LOCK = threading.Lock()
+
+
+def _when(bh):
+    """Il y a combien de temps ce bloc (meme d'une branche abandonnee) a ete trouve."""
+    hd = rpc("getblockheader", [bh]) if bh else None
+    return (time.time() - hd["time"]) if hd and hd.get("time") else None
+
+
+def _ago(s):
+    if s is None or s < 0:
+        return "à l'instant"   # l'horloge d'un bloc peut avoir quelques secondes d'avance
+    return "il y a " + dur(s)
+
+
+def fork_section(info):
+    """Voyant « fork detecte » : cherche dans le noeud (getchaintips) des branches concurrentes de ta chaine.
+    - vert   : une seule chaine (un simple bloc orphelin du passe reste vert, avec une phrase d'explication) ;
+    - orange : branche concurrente a la hauteur de ta chaine, chaine plus longue annoncee, ou branche de 2 a 5 blocs ;
+    - rouge  : branche invalide rejetee, ou branche concurrente de 6 blocs ou plus.
+    Un noeud ne telecharge pas toujours les blocs d'une branche de meme force : on lit donc aussi les branches
+    dont il ne connait que les en-tetes (statuts headers-only et valid-headers)."""
+    h = info.get("blocks")
+    tips = rpc("getchaintips")
+    if h is None or not isinstance(tips, list):
+        return None
+    live, past, invalid, ahead, seen = [], [], [], [], {}
+    for t in tips:
+        st, th = t.get("status"), t.get("height")
+        if st == "active" or th is None or th < h - FORK_WINDOW:
+            continue
+        if st == "invalid":
+            invalid.append(t)
+        elif th > h:
+            if st == "valid-fork":
+                live.append(t)
+            elif not info.get("initialblockdownload"):
+                seen[t.get("hash")] = _FK["seen"].get(t.get("hash"), time.time())
+                if time.time() - seen[t.get("hash")] >= AHEAD_DELAY:
+                    ahead.append(t)
+        elif th == h:
+            live.append(t)
+        else:
+            past.append(t)
+    _FK["seen"] = seen
+    lines, state = [], "ok"
+    rank = {"ok": 0, "warn": 1, "bad": 2}
+
+    def raise_to(s):
+        nonlocal state
+        if rank[s] > rank[state]:
+            state = s
+    for t in invalid:
+        raise_to("bad")
+        lines.append("Ton nœud a rejeté une branche invalide (jusqu'au bloc %s, %s) : "
+                     "quelqu'un a envoyé des blocs qui ne respectent pas les règles." % (fr_int(t["height"]), _ago(_when(t.get("hash")))))
+    for t in live:
+        raise_to("bad" if t["branchlen"] >= 6 else "warn")
+        lines.append("Une branche concurrente de %s est arrivée à la hauteur de ta chaîne (bloc %s). "
+                     "Elle se règle normalement au prochain bloc." % (plural(t["branchlen"], "bloc"), fr_int(t["height"])))
+    for t in ahead:
+        raise_to("warn")
+        lines.append("Des pairs annoncent une chaîne plus longue que la tienne (bloc %s contre %s) : "
+                     "ton nœud est peut-être en retard ou sur une autre branche." % (fr_int(t["height"]), fr_int(h)))
+    one, deep = [], []
+    for t in sorted(past, key=lambda x: -x["height"]):
+        (deep if t["branchlen"] >= 2 else one).append(t)
+    for t in deep[:3]:
+        raise_to("bad" if t["branchlen"] >= 6 else "warn")
+        lines.append("Une branche concurrente de %s n'a pas été retenue (jusqu'au bloc %s, %s)."
+                     % (plural(t["branchlen"], "bloc"), fr_int(t["height"]), _ago(_when(t.get("hash")))))
+    for t in deep[3:]:
+        raise_to("bad" if t["branchlen"] >= 6 else "warn")
+    if len(deep) > 3:
+        lines.append("Et %d autres branches concurrentes dans les %d derniers blocs." % (len(deep) - 3, FORK_WINDOW))
+    if one:
+        t = one[0]
+        lines.append("%s orphelin%s dans les %d derniers blocs (le dernier au bloc %s, %s). Sans gravité : "
+                     "deux blocs ont été trouvés en même temps, un seul est resté."
+                     % (plural(len(one), "bloc"), "s" if len(one) > 1 else "", FORK_WINDOW, fr_int(t["height"]), _ago(_when(t.get("hash")))))
+    if state == "ok":
+        label = "Aucun fork détecté"
+        detail = "Les %d derniers blocs forment une seule chaîne." % FORK_WINDOW if not lines else "Aucun fork en cours."
+    elif state == "warn":
+        label = "Fork possible : patiente"
+        detail = "Attends quelques blocs avant d'accepter un paiement important."
+    else:
+        label = "Fork détecté : prudence"
+        detail = "N'accepte aucun paiement important avant d'avoir compris ce qui se passe, et préviens les autres propriétaires de nœuds Radthal."
+    return {"id": "fork", "type": "fork", "state": state, "label": label, "detail": detail, "lines": lines}
+
+
+def fork_cached(info):
+    with _FK_LOCK:
+        if time.time() - _FK["t"] > 15 or _FK["sec"] is None or _FK["h"] != info.get("blocks"):
+            _FK["sec"], _FK["t"], _FK["h"] = fork_section(info), time.time(), info.get("blocks")
+        return _FK["sec"]
+
+
+_AV = {"t": 0.0, "ref": None, "sec": None}
+
+
+def advice_cached(info):
+    """Les valeurs ne changent que tous les 100 blocs : on ne recalcule que si le bloc de reference change (ou toutes les 5 min)."""
+    h = info.get("blocks") or 0
+    ref = (h - REF_DEPTH) // 100 * 100
+    with _FK_LOCK:
+        if _AV["sec"] is None or _AV["ref"] != ref or time.time() - _AV["t"] > 300:
+            _AV["sec"], _AV["t"], _AV["ref"] = advice_section(info), time.time(), ref
+        return _AV["sec"]
+
+
+def advice_section(info):
+    """Valeurs conseillees pour la PROCHAINE version du noeud (a recopier dans chainparams.cpp) : un bloc de reference
+    environ 1 000 blocs sous la tete (arrondi aux 100 blocs). Bitcoin Core n'a plus de checkpoints : ces deux valeurs ne
+    protegent que les nouveaux noeuds pendant leur synchronisation, pas une chaine deja etablie."""
+    h = info.get("blocks")
+    if not h or h < REF_DEPTH + 100:
+        return None
+    ref = (h - REF_DEPTH) // 100 * 100
+    bh = rpc("getblockhash", [ref])
+    hd = rpc("getblockheader", [bh]) if bh else None
+    if not hd or not hd.get("chainwork"):
+        return None
+    return {"id": "advice", "type": "advice", "title": "Pour la prochaine version du nœud (conseillé)", "items": [
+        {"label": "Bloc de référence", "value": "%s (%s blocs sous la tête)" % (fr_int(ref), fr_int(h - ref)), "copy": False},
+        {"label": "defaultAssumeValid", "value": bh, "copy": True},
+        {"label": "nMinimumChainWork", "value": hd["chainwork"], "copy": True}],
+        "warn": "À recopier dans chainparams.cpp seulement lors d'une nouvelle version du nœud. Ces deux valeurs aident les nouveaux nœuds "
+                "à ne pas se laisser tromper pendant leur synchronisation ; elles n'empêchent pas la réécriture d'une chaîne déjà établie "
+                "(Bitcoin Core n'a plus de points de contrôle)."}
+
+
+# ---------------------------------------------------------------- explorateur de blocs (version simple de mempool.space)
+
+XP_PAGE = 20          # transactions par page
+XP_CAP = 12           # entrees et sorties detaillees par transaction (le reste est compte)
+XP_SEM = threading.BoundedSemaphore(4)      # au plus 4 explorations en meme temps : le noeud reste tranquille
+
+
+class XpError(Exception):
+    pass
+
+
+def _clean(s, n=300):
+    """Texte venant de la chaine (donc ecrit par n'importe qui) : on retire les caracteres de controle et
+    invisibles, on coupe. La page l'affiche en texte brut, jamais comme du HTML."""
+    s = "".join(ch if (ch.isprintable() or ch in " \n") else "·" for ch in str(s))
+    s = re.sub(r"\n{2,}", "\n", s).strip()
+    return s[:n]
+
+
+def coinbase_tag(hx):
+    """Le texte lisible de la coinbase (souvent le nom du pool) ; vide si ce n'est que du binaire."""
+    try:
+        raw = bytes.fromhex(hx or "")
+    except Exception:
+        return ""
+    t = re.sub(r"[^\x20-\x7e]+", " ", raw.decode("latin-1")).strip()
+    return t[:120] if len(re.sub(r"[^A-Za-z]", "", t)) >= 3 else ""
+
+
+def opreturn_text(spk):
+    parts = [p for p in (spk.get("asm") or "").split(" ")[1:] if re.fullmatch(r"(?:[0-9a-f]{2})+", p)]
+    data = b"".join(bytes.fromhex(p) for p in parts)
+    if not data:
+        return {"label": "Donnée vide", "text": ""}
+    txt = data.decode("utf-8", "replace")
+    printable = sum(1 for ch in txt if ch.isprintable() or ch in " \n")
+    if printable < 0.8 * len(txt):
+        return {"label": "Donnée (OP_RETURN)", "text": "hex : " + data.hex()[:160]}
+    if txt.startswith("RDTM"):
+        return {"label": "Message Radthal", "text": _clean(txt[4:])}
+    return {"label": "Donnée (OP_RETURN)", "text": _clean(txt)}
+
+
+def _tx_row(raw, idx):
+    ins, outs, tot = [], [], 0.0
+    for o in raw.get("vout", []):
+        spk, val = o.get("scriptPubKey") or {}, o.get("value") or 0
+        tot += val
+        if len(outs) < XP_CAP:
+            e = {"v": val, "addr": spk.get("address"), "type": spk.get("type")}
+            if spk.get("type") == "nulldata":
+                e["data"] = opreturn_text(spk)
+            outs.append(e)
+    vin = raw.get("vin", [])
+    for i in vin[:XP_CAP]:
+        if "coinbase" in i:
+            ins.append({"cb": True})
+        else:
+            p = i.get("prevout") or {}
+            ins.append({"v": p.get("value"), "addr": (p.get("scriptPubKey") or {}).get("address")})
+    vs, fee = raw.get("vsize") or 0, raw.get("fee")
+    return {"txid": raw.get("txid"), "i": idx, "cb": bool(vin and "coinbase" in vin[0]), "nin": len(vin),
+            "nout": len(raw.get("vout", [])), "out": round(tot, 8), "fee": fee, "vsize": vs,
+            "rate": (fee * 1e8 / vs) if (fee is not None and vs) else None, "ins": ins, "outs": outs}
+
+
+def _flag_mine(rows):
+    """Marque les adresses qui sont a toi (elles seront masquees par defaut dans la page)."""
+    addrs = []
+    for r in rows:
+        for e in r["ins"] + r["outs"]:
+            a = e.get("addr")
+            if a and a not in addrs and len(addrs) < 80:
+                addrs.append(a)
+    mine = set()
+    if addrs:
+        res = rpc_batch([("getaddressinfo", [a]) for a in addrs], wallet=WALLET, timeout=20)
+        for a, x in zip(addrs, res or []):
+            if x and x.get("ismine"):
+                mine.add(a)
+    for r in rows:
+        for e in r["ins"] + r["outs"]:
+            if e.get("addr") in mine:
+                e["mine"] = True
+        r["mine"] = any(e.get("mine") for e in r["outs"])
+    return mine
+
+
+def _raws(bh, ids):
+    """Transactions d'un bloc avec frais et entrees (verbosity 2) ; sinon sans (verbosity 1)."""
+    if not ids:
+        return []
+    out = rpc_batch([("getrawtransaction", [t, 2, bh]) for t in ids], timeout=30) or [None] * len(ids)
+    miss = [i for i, r in enumerate(out) if r is None]
+    if miss:
+        again = rpc_batch([("getrawtransaction", [ids[i], 1, bh]) for i in miss], timeout=30) or [None] * len(miss)
+        for i, r in zip(miss, again):
+            out[i] = r
+    return out
+
+
+def xp_block(ref, page=0, txid=None):
+    """Le detail d'un bloc : ref = hauteur (int) ou hash (64 caracteres hexadecimaux)."""
+    tip = rpc("getblockcount")
+    if tip is None:
+        raise XpError("Le nœud ne répond pas pour le moment.")
+    if isinstance(ref, int):
+        if ref < 0 or ref > tip:
+            raise XpError("Le bloc %s n'existe pas encore. Le dernier bloc est le %s." % (fr_int(ref), fr_int(tip)))
+        bh = rpc("getblockhash", [ref])
+    else:
+        bh = ref
+    blk = rpc("getblock", [bh, 1], timeout=20) if bh else None
+    if not blk:
+        raise XpError("Ce bloc est introuvable.")
+    txs = blk.get("tx", [])
+    n = len(txs)
+    pages = max(1, -(-n // XP_PAGE))
+    if txid and txid in txs:
+        page = txs.index(txid) // XP_PAGE
+    page = max(0, min(int(page), pages - 1))
+    ids = txs[page * XP_PAGE:(page + 1) * XP_PAGE]
+    want = ids if page == 0 else [txs[0]] + ids          # la coinbase sert toujours (recompense, mineur)
+    raws = _raws(bh, want)
+    cb_raw = raws[0] if raws else None
+    rows = []
+    for k, r in enumerate(raws[(0 if page == 0 else 1):]):
+        i = page * XP_PAGE + k
+        rows.append(_tx_row(r, i) if r else {"txid": ids[k], "i": i, "cb": i == 0, "nin": None, "nout": None, "out": None,
+                                             "fee": None, "vsize": None, "rate": None, "ins": [], "outs": []})
+    cb_row = _tx_row(cb_raw, 0) if cb_raw else None
+    _flag_mine(rows + ([cb_row] if (cb_row and page != 0) else []))
+    if cb_row is not None and page == 0 and rows:
+        cb_row = rows[0]
+    stats = rpc("getblockstats", [bh, ["subsidy", "totalfee", "avgfeerate"]], timeout=20) or {}
+    cbh = (blk.get("coinbase_tx") or {}).get("coinbase")
+    if not cbh and cb_raw and cb_raw.get("vin"):
+        cbh = cb_raw["vin"][0].get("coinbase")
+    return {"kind": "block", "h": blk.get("height"), "hash": blk.get("hash"), "time": blk.get("time"),
+            "conf": blk.get("confirmations"), "ntx": n, "size": blk.get("size"), "weight": blk.get("weight"),
+            "diff": blk.get("difficulty"), "ver": blk.get("versionHex"), "bits": blk.get("bits"),
+            "nonce": blk.get("nonce"), "merkle": blk.get("merkleroot"), "prev": blk.get("previousblockhash"),
+            "next": blk.get("nextblockhash"), "tip": tip, "tag": coinbase_tag(cbh),
+            "reward": cb_row["out"] if cb_row else None,
+            "subsidy": stats["subsidy"] / 1e8 if "subsidy" in stats else None,
+            "fees": stats["totalfee"] / 1e8 if "totalfee" in stats else None,
+            "mine": bool(cb_row and cb_row["mine"]), "focus": txid if (txid and txid in txs) else None, "page": page, "pages": pages, "per": XP_PAGE, "rows": rows}
+
+
+def xp_tx(txid):
+    raw = rpc("getrawtransaction", [txid, 2], timeout=15)          # file d'attente, ou index des transactions
+    bh = raw.get("blockhash") if raw else None
+    if raw is None:
+        w = rpc("gettransaction", [txid], wallet=WALLET, timeout=10)       # sinon : une transaction de ton portefeuille
+        bh = w.get("blockhash") if w else None
+    if bh:
+        return xp_block(bh, txid=txid)
+    if raw:
+        row = _tx_row(raw, None)
+        _flag_mine([row])
+        ent = rpc("getmempoolentry", [txid]) or {}
+        return {"kind": "tx", "row": row, "since": ent.get("time"), "tip": rpc("getblockcount")}
+    raise XpError("Rien ne correspond à ces 64 caractères : ce n'est ni un bloc, ni une transaction connue du nœud. "
+                  "Une transaction déjà confirmée ne se retrouve que si elle est dans ton portefeuille "
+                  "(ou si le nœud tient un index des transactions).")
+
+
+def xp_parse(q):
+    q = (q or "").strip()[:200].lstrip("#").strip()
+    d = re.sub(r"[\s  ',]", "", q)
+    if re.fullmatch(r"\d{1,9}", d):
+        return "h", int(d)
+    if re.fullmatch(r"[0-9a-fA-F]{64}", q):
+        return "hash", q.lower()
+    return None
+
+
+def xp_search(q):
+    p = xp_parse(q)
+    if not p:
+        if re.match(r"^(rdt1|bc1|tb1|bcrt1|[13])[A-Za-z0-9]{20,}$", (q or "").strip()):
+            raise XpError("La recherche par adresse n'existe pas : le nœud ne garde pas d'index des adresses. "
+                          "Cherche un numéro de bloc, un hash de bloc ou un identifiant de transaction.")
+        raise XpError("Écris un numéro de bloc (par exemple 1234), un hash de bloc ou un identifiant de transaction "
+                      "(64 caractères).")
+    kind, v = p
+    if kind == "h":
+        return xp_block(v)
+    if rpc("getblockheader", [v]):
+        return xp_block(v)
+    return xp_tx(v)
+
+
+_XM = {"n": -1, "items": []}
+
+
+def xp_mine(page=0, per=20):
+    m = wallet_blocks()
+    with _W_LOCK:
+        if _XM["n"] != len(m):
+            _XM["items"] = sorted(m.values(), key=lambda t: t.get("blockheight") or 10 ** 12, reverse=True)
+            _XM["n"] = len(m)
+        items = _XM["items"]
+    total = len(items)
+    pages = max(1, -(-total // per))
+    page = max(0, min(int(page), pages - 1))
+    chunk = items[page * per:(page + 1) * per]
+    hds = rpc_batch([("getblockheader", [t["blockhash"]]) for t in chunk], timeout=20) if chunk else []
+    rows = []
+    for t, hd in zip(chunk, hds or [None] * len(chunk)):
+        hd = hd or {}
+        rows.append({"hash": t["blockhash"], "h": hd.get("height", t.get("blockheight")), "time": hd.get("time"),
+                     "ntx": hd.get("nTx"), "conf": hd.get("confirmations")})
+    return {"kind": "mine", "rows": rows, "total": total, "full": bool(FULL_SCAN and _W["scanned"]),
+            "page": page, "pages": pages}
+
+
+def xp_api(path, qs):
+    """Les trois routes d'exploration. Toutes en lecture seule, entrees verifiees, une reponse JSON."""
+    def one(k, default=""):
+        return (qs.get(k) or [default])[0][:200]
+    try:
+        if not XP_SEM.acquire(timeout=5):
+            raise XpError("Beaucoup de demandes en même temps : réessaie dans un instant.")
+        try:
+            if path == "/api/search":
+                return xp_search(one("q"))
+            if path == "/api/block":
+                p = xp_parse(one("h"))
+                if not p:
+                    raise XpError("Numéro ou hash de bloc non valide.")
+                page = int(one("p", "0")) if re.fullmatch(r"\d{1,6}", one("p", "0")) else 0
+                tx = one("tx") if re.fullmatch(r"[0-9a-fA-F]{64}", one("tx")) else None
+                return xp_block(p[1], page=page, txid=tx.lower() if tx else None)
+            if path == "/api/mine":
+                return xp_mine(int(one("p", "0")) if re.fullmatch(r"\d{1,6}", one("p", "0")) else 0)
+        finally:
+            XP_SEM.release()
+        raise XpError("Demande inconnue.")
+    except XpError as e:
+        return {"kind": "err", "msg": str(e)}
+    except Exception:
+        return {"kind": "err", "msg": "Impossible de lire cette information pour le moment."}
+
+
 # ---------------------------------------------------------------- vues
 
 def common_cards(info, nh, mine_txs):
@@ -369,6 +814,9 @@ def view_dashboard():
     bal = (rpc("getbalances", wallet=WALLET) or {}).get("mine", {})
     nh = rpc("getnetworkhashps", [30]) or 0
     secs.append(blocks_section(info.get("blocks"), mine))
+    fk = fork_cached(info)
+    if fk:
+        secs.append(fk)
     items = common_cards(info, nh, mine)
     items += [
         card("peers", "Pairs connectés", num=net.get("connections")) if net else card("peers", "Pairs connectés", value="-"),
@@ -380,6 +828,9 @@ def view_dashboard():
     ]
     secs.append(cards("stats", items))
     secs.append(miner_section(st, workers, nh))
+    adv = advice_cached(info)
+    if adv:
+        secs.append(adv)
     return secs, info
 
 
@@ -458,7 +909,7 @@ def view_mempool():
         secs.append({"id": "bars", "type": "bars", "title": "Répartition des frais", "items": bars})
         secs.append(table("txs", "Transactions (les 50 premières, par frais décroissants)",
                           ["Txid", "sat/vB", "Taille vB", "Attente"],
-                          [[t[1][:12] + "…", fnum(t[0], 1), t[2], {"age": t[4]}] for t in txs[:50]]))
+                          [[{"tx": t[1], "t": t[1][:12] + "…"}, fnum(t[0], 1), t[2], {"age": t[4]}] for t in txs[:50]]))
     return secs, inf
 
 
@@ -684,6 +1135,81 @@ button.cp:hover{border-color:var(--acc);color:var(--acc2)}
 .crow code.hint{font:13px Inter,system-ui,sans-serif;color:var(--mu);background:none;border-style:dashed}
 @media(max-width:640px){.crow .l{width:100%}.crow code{min-width:0;flex:1 1 100%}}
 .cwarn{color:var(--warn);font-size:12px;margin-top:10px}
+.fork{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--edge);border-radius:14px;padding:14px 16px}
+.fork .fled{flex:none;width:14px;height:14px;border-radius:50%;margin-top:4px;background:var(--mu)}
+.fork.ok .fled{background:var(--good);box-shadow:0 0 10px var(--good)}
+.fork.warn{border-color:var(--warn)}.fork.warn .fled{background:var(--warn);box-shadow:0 0 10px var(--warn);animation:blink 1.6s infinite}
+.fork.bad{border-color:var(--bad)}.fork.bad .fled{background:var(--bad);box-shadow:0 0 10px var(--bad);animation:blink 1.1s infinite}
+.fork b{display:block;font-size:17px;font-weight:800}
+.fork.ok b{color:var(--good)}.fork.warn b{color:var(--warn)}.fork.bad b{color:var(--bad)}
+.fork p{margin:4px 0 0;font-size:13px;color:var(--mu);line-height:1.45}
+.fork ul{margin:9px 0 0;padding-left:18px;font-size:13px;line-height:1.5;color:var(--tx)}
+.fork li{margin:3px 0}
+.crow .l.w{width:170px;text-transform:none;letter-spacing:0;font-size:13px}
+@media(max-width:640px){.crow .l.w{width:100%}}
+.srch{flex:1 1 300px;max-width:480px;display:flex;gap:8px;order:2}
+.top .brand{order:1}.top .status{order:3}
+.srch input{flex:1;min-width:0;background:#0e1626;color:var(--tx);border:1px solid var(--edge);border-radius:10px;padding:9px 12px;font:14px Inter,system-ui,sans-serif}
+.srch input:focus{outline:2px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
+.srch button{background:var(--acc);color:#1a0f08;border:0;border-radius:10px;padding:9px 14px;font:700 13px Inter,system-ui,sans-serif;cursor:pointer}
+.srch button:hover{background:var(--acc2)}
+@media(max-width:900px){.srch{order:3;flex:1 1 100%;max-width:none}.top .status{order:2}}
+.blk{cursor:pointer;transition:transform .15s,border-color .2s}
+.blk:hover,.blk:focus-visible{transform:translateY(-3px);border-color:var(--acc);outline:none}
+.card.click{cursor:pointer}.card.click:hover{border-color:var(--acc)}
+button.xlink{background:none;border:0;color:var(--acc2);font:inherit;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
+button.xlink.mono,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+body.xpopen{overflow:hidden}
+.xp{position:fixed;inset:0;z-index:50;background:rgba(5,8,14,.82);overflow:auto;padding:18px 12px;display:flex;justify-content:center;align-items:flex-start}
+.xp[hidden]{display:none}
+.xpc{width:min(980px,100%);background:var(--bg2);border:1px solid var(--edge);border-radius:16px;padding:0 0 18px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.xpbar{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--edge);position:sticky;top:0;background:var(--bg2);border-radius:16px 16px 0 0;z-index:2}
+.xpt{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--mu)}
+button.xpx{background:#0e1626;color:var(--tx);border:1px solid var(--edge);border-radius:8px;padding:6px 12px;font:600 12px Inter,system-ui,sans-serif;cursor:pointer}
+.xpb{padding:14px 16px 0}
+.xpmsg{padding:26px 8px;text-align:center;color:var(--mu);font-size:15px;line-height:1.5}.xpmsg.bad{color:var(--bad)}
+.xpnav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+button.xpb2{background:#0e1626;color:var(--tx);border:1px solid var(--edge);border-radius:8px;padding:7px 12px;font:600 12px Inter,system-ui,sans-serif;cursor:pointer}
+button.xpb2:hover:not(:disabled){border-color:var(--acc);color:var(--acc2)}
+button.xpb2:disabled{opacity:.35;cursor:default}
+.xtitle{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin:4px 0 12px}
+.xtitle h2{margin:0;font-size:26px;font-weight:800;letter-spacing:-.01em}
+.xbadge{font-size:11px;font-weight:700;border:1px solid var(--edge);border-radius:999px;padding:3px 9px;color:var(--mu);background:var(--card)}
+.xbadge.mine{color:var(--acc2);border-color:var(--acc);background:#2a1a12}.xbadge.cb{color:var(--good);border-color:var(--good)}
+.xbadge.bad{color:var(--bad);border-color:var(--bad)}.xbadge.warn{color:var(--warn);border-color:var(--warn)}.xbadge.conf{color:var(--good)}
+.xkvs{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:4px 14px;margin-bottom:10px}
+.xkv{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid rgba(46,58,80,.55);font-size:14px;align-items:baseline}
+.xkv:last-child{border-bottom:0}
+.xl{flex:none;width:150px;color:var(--mu);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.xvv{min-width:0;overflow-wrap:anywhere;line-height:1.45}
+.xvv code{font-size:12px;word-break:break-all}
+details.xdet{margin-bottom:14px}details.xdet summary{cursor:pointer;color:var(--mu);font-size:13px;margin:0 0 8px}
+.xhead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 8px}
+.xhead.foot{margin-top:10px;justify-content:flex-end}
+.xhead h3{margin:0;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--mu)}
+.xppg{display:flex;align-items:center;gap:10px;font-size:12px}
+.xlist{display:flex;flex-direction:column;gap:6px}
+.xtx{background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+.xtx.open{border-color:var(--acc)}
+.xth{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;padding:10px 12px;cursor:pointer;font-size:13px}
+.xth:hover,.xth:focus-visible{background:#1b2538;outline:none}
+.xi{color:var(--mu);min-width:30px;font-variant-numeric:tabular-nums}
+.xid{font-weight:600}
+.xt2{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums}
+.xtd{padding:2px 12px 12px;border-top:1px solid var(--edge);background:#121a29}
+.xfull{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;font-size:12px}
+.xfull code{overflow-wrap:anywhere;word-break:break-all}
+.xiog{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.xiog{grid-template-columns:1fr}.xl{width:100%}.xkv{flex-wrap:wrap;gap:2px}.xt2{margin-left:0}}
+.xio h4{margin:6px 0;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--mu)}
+.xir{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed rgba(46,58,80,.6);font-size:12px}
+.xa{min-width:0;overflow-wrap:anywhere;word-break:break-all}.xv{flex:none;font-variant-numeric:tabular-nums;font-weight:600}
+button.xmine{background:#2a1a12;color:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:2px 8px;font:600 11px Inter,system-ui,sans-serif;cursor:pointer}
+.xdata{margin:4px 0 6px;padding:7px 9px;background:#0e1626;border-left:3px solid var(--acc);border-radius:6px}
+.xdata small{display:block;color:var(--mu);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:3px}
+.xq{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+.xmore,.xsz{font-size:12px;margin-top:6px}
+.xnote{font-size:12px;margin:14px 0 2px;line-height:1.5}
 .note{margin-top:22px;padding:12px 16px;border-radius:12px;border:1px solid var(--edge);background:var(--card);font-size:14px}
 .note.bad{border-color:var(--bad);color:var(--bad)}.note.warn{border-color:var(--warn);color:var(--warn)}
 footer{margin-top:34px;color:#6b7890;font-size:12px;text-align:center}
@@ -694,6 +1220,7 @@ footer{margin-top:34px;color:#6b7890;font-size:12px;text-align:center}
   <svg viewBox="0 0 256 256" aria-hidden="true"><rect width="256" height="256" rx="40" fill="#0b1220"/><g fill="none" stroke="#ff7a2f" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"><path d="M128 36L206 80V166L128 210L50 166V80Z"/><path d="M50 80L128 124L206 80M128 124V210"/></g></svg>
   <div><h1 id="ttl">__TITLE__</h1><p class="sub" id="sub"></p></div>
  </div>
+ <form class="srch" id="srch" role="search" autocomplete="off"><input id="q" type="search" placeholder="N° de bloc, hash ou transaction" aria-label="Rechercher un bloc ou une transaction" maxlength="130" enterkeyhint="search"><button type="submit">Chercher</button></form>
  <div class="status"><span class="pill" id="pill"><i></i><span id="pilltx">Connexion…</span></span><span id="upd"></span></div>
 </header>
 <main id="root"></main>
@@ -737,6 +1264,7 @@ R.cards=(rec,d)=>{
    c.v.append(c.n,c.u);c.el.append(c.lab,c.v,c.s);rec.map[it.id]=c;rec.grid.append(c.el);}
   c.lab.textContent=it.label;c.s.textContent=it.sub||"";c.s.style.display=it.sub?"":"none";
   c.el.className="card"+(it.accent?" accent":"")+(it.tone?" "+it.tone:"");
+  if(it.id==="found"){c.el.classList.add("click");c.el.onclick=()=>xpGo("mes-blocs");c.el.title="Voir mes blocs trouvés";}
   c.u.textContent=it.unit||"";
   if(it.num!==null&&it.num!==undefined){const ch=setNum(c.n,it.num,it.dec||0);if(ch&&c.hadValue){c.el.classList.add("bump");setTimeout(()=>c.el.classList.remove("bump"),1300);}c.hadValue=true;}
   else{c.n.textContent=it.value!=null?it.value:"-";c.n._shown=undefined;}
@@ -755,6 +1283,7 @@ R.chain=(rec,d)=>{
  d.blocks.forEach(b=>{
   seen.add(b.hash);let e=rec.map.get(b.hash);
   if(!e){e=$("div","blk");e.append($("small","","BLOC"),$("b","",fmt(b.h,0)),$("em","",""));rec.map.set(b.hash,e);rec.band.append(e);
+   e.tabIndex=0;e.setAttribute("role","button");{const go=()=>xpGo("bloc/"+b.hash);e.onclick=go;e.onkeydown=ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();go();}};}
    if(!rec.first&&!reduce)e.classList.add("enter");added=true;}
   e.classList.toggle("mine",!!b.mine);
   e.lastChild.textContent=b.mine?"trouvé par toi":(b.ntx+" tx");
@@ -767,7 +1296,7 @@ R.chain=(rec,d)=>{
  if(added||rec.first){rec.scrollEnd=rec.first?"auto":"smooth";}
  rec.first=false;
  rec.foot.textContent="";
- if(last){rec.foot.append("Dernier bloc : ",$("b","",fmt(last.h,0)),", trouvé il y a ",ageSpan(last.time));}
+ if(last){{const lb=$("button","xlink",fmt(last.h,0));lb.type="button";lb.style.fontWeight="800";lb.title="Voir le contenu de ce bloc";lb.onclick=()=>xpGo("bloc/"+last.hash);rec.foot.append("Dernier bloc : ",lb,", trouvé il y a ",ageSpan(last.time));}}
 };
 
 /* ---- mineur */
@@ -803,7 +1332,7 @@ R.miner=(rec,d)=>{
 
 /* ---- tableaux */
 function cell(td,c){
- if(c&&typeof c==="object"){ if(c.age)td.append(ageSpan(c.age)); else{td.textContent=c.t;if(c.cls)td.className=c.cls;} }
+ if(c&&typeof c==="object"){ if(c.age)td.append(ageSpan(c.age)); else if(c.tx){const a=$("button","xlink mono",c.t);a.type="button";a.title="Voir cette transaction";a.onclick=()=>xpGo("tx/"+c.tx);td.append(a);} else{td.textContent=c.t;if(c.cls)td.className=c.cls;} }
  else td.textContent=c==null?"-":c;
 }
 R.table=(rec,d)=>{
@@ -839,6 +1368,30 @@ R.connect=(rec,d)=>{
  if(d.warn)box.append($("div","cwarn",d.warn));
  rec.el.append(box);
 };
+R.fork=(rec,d)=>{
+ if(!rec.el){rec.el=$("section","sec");rec.el.append($("h2","","Surveillance des forks"));
+  rec.box=$("div","fork");rec.led=$("i","fled");const body=$("div","");
+  rec.t=$("b");rec.p=$("p");rec.ul=$("ul");body.append(rec.t,rec.p,rec.ul);rec.box.append(rec.led,body);rec.el.append(rec.box);}
+ rec.box.className="fork "+d.state;rec.t.textContent=d.label;rec.p.textContent=d.detail;
+ const sg=JSON.stringify(d.lines);
+ if(rec.sig!==sg){rec.sig=sg;rec.ul.textContent="";d.lines.forEach(x=>rec.ul.append($("li","",x)));}
+ rec.ul.style.display=d.lines.length?"":"none";
+};
+function copyTxt(v,b){
+ const ok=()=>{b.textContent="Copié ✓";setTimeout(()=>b.textContent="Copier",1500);};
+ if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(v).then(ok,()=>{});
+ else{const t=$("textarea");t.value=v;document.body.append(t);t.select();try{document.execCommand("copy");ok();}catch(e){}t.remove();}
+}
+R.advice=(rec,d)=>{
+ if(!rec.el){rec.el=$("section","sec");rec.el.append($("h2","",d.title));rec.box=$("div","conn");rec.rows=[];
+  d.items.forEach((it,i)=>{const r=$("div","crow"),c=$("code");r.append($("span","l w",it.label),c);
+   const row={c,v:""};
+   if(it.copy){const b=$("button","cp","Copier");b.onclick=()=>copyTxt(row.v,b);r.append(b);}
+   rec.box.append(r);rec.rows.push(row);});
+  rec.note=$("div","cwarn");rec.box.append(rec.note);rec.el.append(rec.box);}
+ d.items.forEach((it,i)=>{const row=rec.rows[i];row.v=it.value;if(row.c.textContent!==it.value)row.c.textContent=it.value;});
+ rec.note.textContent=d.warn||"";
+};
 R.note=(rec,d)=>{ if(!rec.el)rec.el=$("div","note"); rec.el.className="note"+(d.tone?" "+d.tone:""); rec.el.textContent=d.text; };
 
 function render(state){
@@ -852,6 +1405,165 @@ function render(state){
 order(root,els);
  for(const k in reg){const r=reg[k];if(r.scrollEnd){r.band.style.scrollBehavior=r.scrollEnd;r.band.scrollLeft=r.band.scrollWidth;r.scrollEnd=null;}}
 }
+
+/* ---- explorateur de blocs : tout ce qui vient de la chaine est affiche en texte brut (textContent), jamais en HTML */
+const XP={el:null,body:null,seq:0};
+const trimNum=(v,d)=>{if(v==null)return "-";let s=Number(v).toFixed(d==null?8:d);if(s.indexOf(".")>=0)s=s.replace(/0+$/,"").replace(/\.$/,"");return Number(s).toLocaleString("fr-FR",{maximumFractionDigits:d==null?8:d});};
+const rdt=v=>v==null?"-":trimNum(v,8)+" RDT";
+const bytesTxt=n=>n==null?"-":(n<1024?n+" o":(n<1048576?(n/1024).toFixed(1).replace(".",",")+" Ko":(n/1048576).toFixed(2).replace(".",",")+" Mo"));
+const diffTxt=d=>d==null?"-":(d<1?Number(d).toPrecision(3).replace(".",","):fmt(d,2));
+const shortId=t=>t?t.slice(0,10)+"…"+t.slice(-6):"-";
+function xpGo(x){const t="#"+x;if(location.hash===t)xpRoute();else location.hash=t;}
+function xpHide(){if(XP.el)XP.el.hidden=true;document.body.classList.remove("xpopen");XP.seq++;}
+function xpClose(){if(location.hash)history.pushState(null,"",location.pathname+location.search);xpHide();}
+function xpShell(){
+ if(XP.el)return;
+ const ov=$("div","xp");ov.hidden=true;ov.setAttribute("role","dialog");ov.setAttribute("aria-modal","true");ov.setAttribute("aria-label","Explorateur de blocs");
+ const card=$("div","xpc"),bar=$("div","xpbar"),x=$("button","xpx","✕ Fermer");card.tabIndex=-1;XP.card=card;x.type="button";x.onclick=xpClose;
+ bar.append($("span","xpt","Explorateur de blocs"),x);XP.body=$("div","xpb");card.append(bar,XP.body);ov.append(card);
+ ov.addEventListener("click",e=>{if(e.target===ov)xpClose();});document.body.append(ov);XP.el=ov;
+ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!ov.hidden)xpClose();});
+}
+function xpRoute(){
+ let raw;try{raw=decodeURIComponent(location.hash.replace(/^#/,""));}catch(e){xpHide();return;}
+ const m=raw.split("/");
+ let url=null;
+ if(m[0]==="bloc"&&m[1])url="api/block?h="+encodeURIComponent(m[1])+(m[2]?"&p="+encodeURIComponent(m[2]):"");
+ else if(m[0]==="tx"&&m[1])url="api/search?q="+encodeURIComponent(m[1]);
+ else if(m[0]==="mes-blocs")url="api/mine?p="+encodeURIComponent(m[1]||"0");
+ else if(m[0]==="chercher"&&m.length>1)url="api/search?q="+encodeURIComponent(m.slice(1).join("/"));
+ if(!url){xpHide();return;}
+ xpLoad(url);
+}
+async function xpLoad(url){
+ xpShell();const my=++XP.seq;XP.el.hidden=false;document.body.classList.add("xpopen");try{XP.card.focus({preventScroll:true});}catch(e){}
+ XP.body.textContent="";XP.body.append($("div","xpmsg","Chargement…"));
+ try{const r=await fetch(url,{cache:"no-store"});const d=await r.json();if(my!==XP.seq)return;xpRender(d);XP.el.scrollTop=0;}
+ catch(e){if(my!==XP.seq)return;XP.body.textContent="";XP.body.append($("div","xpmsg bad","Page injoignable. Réessaie dans un instant."));}
+}
+function xpRender(d){
+ XP.body.textContent="";
+ if(d.kind==="block")xpBlock(d);else if(d.kind==="tx")xpTx(d);else if(d.kind==="mine")xpMine(d);
+ else XP.body.append($("div","xpmsg bad",d.msg||"Rien à afficher."));
+}
+function xpPager(page,pages,go){
+ const p=$("div","xppg"),a=$("button","xpb2","◀"),b=$("button","xpb2","▶");a.type=b.type="button";
+ a.disabled=page<=0;b.disabled=page>=pages-1;a.onclick=()=>go(page-1);b.onclick=()=>go(page+1);
+ p.append(a,$("span","mu","page "+(page+1)+" sur "+pages),b);return p;
+}
+function addrNode(e){
+ const s=$("span","xa");
+ if(!e.addr){s.textContent=e.type==="nulldata"?"donnée OP_RETURN":"script sans adresse";s.classList.add("mu");return s;}
+ if(e.mine){const b=$("button","xmine","Ton adresse · afficher");b.type="button";b.onclick=ev=>{ev.stopPropagation();s.textContent=e.addr;s.classList.add("shown");};s.append(b);return s;}
+ s.textContent=e.addr;return s;
+}
+function ioList(title,list,total){
+ const c=$("div","xio");c.append($("h4","",title+" ("+(total==null?"?":total)+")"));
+ list.forEach(e=>{
+  const r=$("div","xir");
+  if(e.cb){r.append($("span","xa mu","Nouveaux RDT (récompense du bloc)"));}
+  else{r.append(addrNode(e));if(e.v!=null)r.append($("span","xv",rdt(e.v)));}
+  c.append(r);
+  if(e.data){const q=$("div","xdata");q.append($("small","",e.data.label),$("div","xq",e.data.text||"(vide)"));c.append(q);}
+ });
+ if(total!=null&&total>list.length)c.append($("div","mu xmore","… et "+(total-list.length)+" autre(s) non affichée(s)"));
+ return c;
+}
+function txRow(r,open){
+ const w=$("div","xtx"),h=$("div","xth");h.tabIndex=0;h.setAttribute("role","button");
+ h.append($("span","xi",r.i==null?"":"#"+r.i),$("span","xid mono",shortId(r.txid)));
+ if(r.cb)h.append($("span","xbadge cb","Coinbase"));
+ if(r.mine)h.append($("span","xbadge mine","ton portefeuille"));
+ const m=$("span","xm mu",(r.nin==null?"?":r.nin)+" → "+(r.nout==null?"?":r.nout));h.append(m);
+ h.append($("span","xt2",r.out==null?"":rdt(r.out)));
+ if(!r.cb&&r.fee!=null)h.append($("span","xf mu","frais "+trimNum(r.fee*1e8,0)+" sat"+(r.rate!=null?" · "+trimNum(r.rate,1)+" sat/vB":"")));
+ const d=$("div","xtd");d.hidden=!open;
+ const full=$("div","xfull");full.append($("span","mu","Identifiant : "),$("code","",r.txid||"-"));
+ if(r.txid){const cp=$("button","cp","Copier");cp.type="button";cp.onclick=ev=>{ev.stopPropagation();copyTxt(r.txid,cp);};full.append(cp);}
+ d.append(full);
+ const g=$("div","xiog");g.append(ioList("Entrées",r.ins,r.nin),ioList("Sorties",r.outs,r.nout));d.append(g);
+ if(r.vsize)d.append($("div","mu xsz","Taille : "+r.vsize+" vB"));
+ const tog=()=>{d.hidden=!d.hidden;w.classList.toggle("open",!d.hidden);};
+ h.onclick=tog;h.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();tog();}};
+ w.classList.toggle("open",!!open);w.append(h,d);return w;
+}
+function kvx(label,node){const r=$("div","xkv");r.append($("span","xl",label));const v=$("span","xvv");if(typeof node==="string")v.textContent=node;else v.append(node);r.append(v);return r;}
+function hashLine(hx){const s=$("span","");s.append($("code","mono",hx));const cp=$("button","cp","Copier");cp.type="button";cp.onclick=()=>copyTxt(hx,cp);s.append(" ",cp);return s;}
+function xpNav(d){
+ const n=$("div","xpnav");
+ const pv=$("button","xpb2","◀ Bloc précédent"),nx=$("button","xpb2","Bloc suivant ▶"),tp=$("button","xpb2","Dernier bloc"),mb=$("button","xpb2","Mes blocs trouvés");
+ [pv,nx,tp,mb].forEach(b=>b.type="button");
+ pv.disabled=!d.prev;nx.disabled=!d.next;tp.disabled=d.h===d.tip&&d.conf>0;
+ pv.onclick=()=>xpGo("bloc/"+d.prev);nx.onclick=()=>xpGo("bloc/"+d.next);tp.onclick=()=>xpGo("bloc/"+d.tip);mb.onclick=()=>xpGo("mes-blocs");
+ n.append(pv,nx,tp,mb);return n;
+}
+function xpBlock(d){
+ const b=XP.body;
+ b.append(xpNav(d));
+ const t=$("div","xtitle");t.append($("h2","","Bloc "+fmt(d.h,0)));
+ if(d.mine)t.append($("span","xbadge mine","Trouvé par toi"));
+ if(d.conf<0)t.append($("span","xbadge bad","Bloc orphelin (hors de la chaîne principale)"));
+ else if(d.h===d.tip)t.append($("span","xbadge","Dernier bloc"));
+ if(d.conf>=0)t.append($("span","xbadge conf",d.conf+(d.conf>1?" confirmations":" confirmation")));
+ b.append(t);
+ const kv=$("div","xkvs");
+ kv.append(kvx("Date",new Date(d.time*1000).toLocaleString("fr-FR")+" (il y a "+ago(d.time)+")"));
+ kv.append(kvx("Hash",hashLine(d.hash)));
+ kv.append(kvx("Transactions",String(d.ntx)));
+ kv.append(kvx("Taille",bytesTxt(d.size)+" · poids "+fmt(d.weight||0,0)+" WU"));
+ if(d.reward!=null){let s=rdt(d.reward);if(d.subsidy!=null&&d.fees!=null)s+=" (subvention "+trimNum(d.subsidy,8)+" + frais "+trimNum(d.fees,8)+")";kv.append(kvx("Récompense",s));}
+ kv.append(kvx("Difficulté",diffTxt(d.diff)));
+ if(d.tag)kv.append(kvx("Étiquette du mineur",d.tag));
+ if(d.prev&&d.h>0){const a=$("button","xlink mono",shortId(d.prev));a.type="button";a.onclick=()=>xpGo("bloc/"+d.prev);kv.append(kvx("Bloc précédent",a));}
+ b.append(kv);
+ const det=$("details","xdet");det.append($("summary","","Détails techniques"));
+ const k2=$("div","xkvs");
+ k2.append(kvx("Version",d.ver||"-"),kvx("Bits",d.bits||"-"),kvx("Nonce",String(d.nonce)),kvx("Racine de Merkle",d.merkle||"-"));
+ det.append(k2);b.append(det);
+ const head=$("div","xhead");head.append($("h3","","Transactions ("+fmt(d.ntx,0)+")"));
+ if(d.pages>1)head.append(xpPager(d.page,d.pages,p=>xpGo("bloc/"+(d.conf<0?d.hash:d.h)+"/"+p)));
+ b.append(head);
+ const list=$("div","xlist");
+ d.rows.forEach(r=>list.append(txRow(r,(d.focus&&r.txid===d.focus)||(d.rows.length===1&&d.ntx===1))));
+ b.append(list);
+ if(d.pages>1){const f=$("div","xhead foot");f.append(xpPager(d.page,d.pages,p=>xpGo("bloc/"+(d.conf<0?d.hash:d.h)+"/"+p)));b.append(f);}
+ b.append($("div","mu xnote","Tes propres adresses sont masquées : clique sur « Ton adresse » pour les afficher. Tout ce qui est écrit dans une transaction ou dans l'étiquette du mineur vient de la chaîne : c'est du texte libre, non vérifié."));
+ history.replaceState(null,"","#bloc/"+(d.conf<0?d.hash:d.h)+(d.page?"/"+d.page:""));
+}
+function xpTx(d){
+ const b=XP.body,n=$("div","xpnav");
+ const tp=$("button","xpb2","Dernier bloc");tp.type="button";tp.onclick=()=>xpGo("bloc/"+d.tip);n.append(tp);b.append(n);
+ const t=$("div","xtitle");t.append($("h2","","Transaction en attente"),$("span","xbadge warn","pas encore dans un bloc"));b.append(t);
+ if(d.since)b.append($("div","mu","Dans la file d'attente depuis "+ago(d.since)+"."));
+ const list=$("div","xlist");list.append(txRow(d.row,true));b.append(list);
+}
+function xpMine(d){
+ const b=XP.body,n=$("div","xpnav"),tp=$("button","xpb2","Dernier bloc");tp.type="button";
+ tp.onclick=()=>{fetch("api/state",{cache:"no-store"}).then(r=>r.json()).then(s=>{const c=s.sections.find(x=>x.type==="chain");if(c&&c.blocks.length)xpGo("bloc/"+c.blocks[c.blocks.length-1].hash);});};
+ n.append(tp);b.append(n);
+ const t=$("div","xtitle");t.append($("h2","","Mes blocs trouvés"),$("span","xbadge mine",fmt(d.total,0)+(d.full?"":" récents")));b.append(t);
+ if(!d.full)b.append($("div","mu xnote","Cette application ne montre que tes blocs les plus récents. La liste complète est dans le Tableau de bord."));
+ if(!d.rows.length){b.append($("div","xpmsg","Aucun bloc trouvé par ton portefeuille pour le moment."));return;}
+ const list=$("div","xlist");
+ d.rows.forEach(r=>{
+  const w=$("div","xtx"),h=$("div","xth");h.tabIndex=0;h.setAttribute("role","button");
+  h.append($("span","xid","Bloc "+(r.h==null?"?":fmt(r.h,0))));
+  if(r.time)h.append($("span","xm mu","il y a "+ago(r.time)));
+  if(r.ntx!=null)h.append($("span","xt2",r.ntx+" tx"));
+  if(r.conf!=null)h.append($("span","xf mu",r.conf+" conf."));
+  const go=()=>xpGo("bloc/"+r.hash);h.onclick=go;h.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go();}};
+  w.append(h);list.append(w);
+ });
+ b.append(list);
+ if(d.pages>1){const f=$("div","xhead foot");f.append(xpPager(d.page,d.pages,p=>xpGo("mes-blocs/"+p)));b.append(f);}
+ history.replaceState(null,"","#mes-blocs"+(d.page?"/"+d.page:""));
+}
+(function(){
+ const f=document.getElementById("srch");
+ f.addEventListener("submit",e=>{e.preventDefault();const q=document.getElementById("q").value.trim();if(!q)return;xpGo("chercher/"+encodeURIComponent(q));});
+ window.addEventListener("hashchange",xpRoute);
+ if(location.hash)xpRoute();
+})();
 
 function setPill(ok,txt){const p=document.getElementById("pill");p.className="pill "+(ok?"ok":"ko");document.getElementById("pilltx").textContent=txt;}
 async function poll(){
@@ -886,8 +1598,12 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path == "/api/state":
+        sp = urllib.parse.urlsplit(self.path)
+        path = sp.path
+        if path in ("/api/search", "/api/block", "/api/mine"):
+            self._send(200, json.dumps(xp_api(path, urllib.parse.parse_qs(sp.query[:600])), ensure_ascii=False).encode("utf-8"),
+                       "application/json; charset=utf-8")
+        elif path == "/api/state":
             self._send(200, json.dumps(get_state(), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
         elif path in ("/", "/index.html"):
             self._send(200, page(), "text/html; charset=utf-8")

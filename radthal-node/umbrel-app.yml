@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-node
 category: bitcoin
 name: Radthal Node
-version: "1.2.2"
+version: "1.2.3"
 tagline: Noeud complet Radthal
 description: >-
   Le noeud Radthal (bitcoind) gere depuis Umbrel, avec une page d'etat : blocs, difficulte, pairs connectes, ports. Arreter l'app arrete le noeud.
 releaseNotes: >-
-  Corrections : comptage des blocs trouves plus leger, nombres qui ne se coupent plus, anciens appareils masques.
+  Le noeud utilise une seule zone de memoire : sa memoire ne gonfle plus apres chaque analyse des branches. Le noeud redemarre une fois pendant la mise a jour (environ 2 minutes). Le logo Radthal remplace le petit logo de la page.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

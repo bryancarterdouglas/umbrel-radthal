@@ -17,6 +17,11 @@ services:
     # bitcoind a besoin de temps pour sauvegarder son etat a l'arret
     stop_grace_period: 2m
     command: ["/build/bin/bitcoind", "-datadir=/data", "-printtoconsole"]
+    # Une seule zone de memoire (glibc) : sans ca, chaque grosse lecture (analyse des branches du Tableau de bord)
+    # laisse des centaines de Mo "libres mais gardes" dans une zone differente, et le noeud gonfle sans fin.
+    # Teste : meme nombre de branches, memoire stable apres 16 analyses de suite au lieu de +5 Go.
+    environment:
+      MALLOC_ARENA_MAX: "1"
     volumes:
       - /home/umbrel/radthal/build:/build:ro
       - /home/umbrel/radthal-data:/data

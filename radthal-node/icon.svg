@@ -1,17 +1,65 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-<rect width="256" height="256" rx="28" fill="#05070b"/>
-<g fill="none" stroke="#39ddff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-<path d="M128 28L206 73V164L128 208L50 164V73Z"/>
-<path d="M50 73L128 118L206 73M128 118V208"/>
-</g>
-<g fill="#39ddff">
-<circle cx="128" cy="28" r="7"/><circle cx="206" cy="73" r="7"/>
-<circle cx="206" cy="164" r="7"/><circle cx="128" cy="208" r="7"/>
-<circle cx="50" cy="164" r="7"/><circle cx="50" cy="73" r="7"/>
-</g>
-<g fill="none" stroke="#8afcff" stroke-width="10" stroke-linecap="round">
-<path d="M82 96L174 160M174 96L82 160"/>
-</g>
-<path d="M108 112L128 97L148 112V144L128 159L108 144Z" fill="#0b1624" stroke="#39ddff" stroke-width="6"/>
-<path d="M128 97L148 112L128 125L108 112Z" fill="#66efff"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><defs>
+<radialGradient id="bgn" cx="50%" cy="46%" r="75%"><stop offset="0" stop-color="#0b2a3d"/><stop offset="0.55" stop-color="#070b12"/><stop offset="1" stop-color="#03050a"/></radialGradient>
+<linearGradient id="topn" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b8fbff"/><stop offset="1" stop-color="#39ddff"/></linearGradient>
+<linearGradient id="lefn" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#39ddff"/><stop offset="1" stop-color="#0e6f8f"/></linearGradient>
+<linearGradient id="rign" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e6f8f"/><stop offset="1" stop-color="#061f2c"/></linearGradient>
+<linearGradient id="strn" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b8fbff"/><stop offset="1" stop-color="#39ddff"/></linearGradient>
+<filter id="glown" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<filter id="softn" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+<pattern id="gridn" width="16" height="27.7" patternUnits="userSpaceOnUse" patternTransform="translate(0 0)"><path d="M8 0L16 4.6V13.8L8 18.4L0 13.8V4.6Z M8 18.4V27.7 M0 13.8L-8 18.4 M16 13.8L24 18.4" fill="none" stroke="#39ddff" stroke-opacity="0.07" stroke-width="0.8"/></pattern>
+</defs>
+<rect width="256" height="256" fill="url(#bgn)"/><rect width="256" height="256" fill="url(#gridn)"/>
+<polygon points="128,40 204.21,84 204.21,172 128,216 51.79,172 51.79,84" fill="none" stroke="#39ddff" stroke-opacity="0.18" stroke-width="1"/>
+<polygon points="128,28 214.6,78 214.6,178 128,228 41.4,178 41.4,78" fill="none" stroke="#39ddff" stroke-opacity="0.35" stroke-width="7" filter="url(#softn)"/>
+<polygon points="128,28 214.6,78 214.6,178 128,228 41.4,178 41.4,78" fill="none" stroke="url(#strn)" stroke-width="3.2" stroke-linejoin="round"/>
+<circle cx="171.3" cy="53" r="2.2" fill="#b8fbff" fill-opacity="0.85"/>
+<circle cx="214.6" cy="128" r="2.2" fill="#b8fbff" fill-opacity="0.85"/>
+<circle cx="171.3" cy="203" r="2.2" fill="#b8fbff" fill-opacity="0.85"/>
+<circle cx="84.7" cy="203" r="2.2" fill="#b8fbff" fill-opacity="0.85"/>
+<circle cx="41.4" cy="128" r="2.2" fill="#b8fbff" fill-opacity="0.85"/>
+<circle cx="84.7" cy="53" r="2.2" fill="#b8fbff" fill-opacity="0.85"/>
+<circle cx="128" cy="28" r="15" fill="#39ddff" fill-opacity="0.14"/>
+<circle cx="128" cy="28" r="8.6" fill="#061f2c" stroke="url(#strn)" stroke-width="3.4"/>
+<circle cx="128" cy="28" r="3.2" fill="#b8fbff"/>
+<circle cx="214.6" cy="78" r="15" fill="#39ddff" fill-opacity="0.14"/>
+<circle cx="214.6" cy="78" r="8.6" fill="#061f2c" stroke="url(#strn)" stroke-width="3.4"/>
+<circle cx="214.6" cy="78" r="3.2" fill="#b8fbff"/>
+<circle cx="214.6" cy="178" r="15" fill="#39ddff" fill-opacity="0.14"/>
+<circle cx="214.6" cy="178" r="8.6" fill="#061f2c" stroke="url(#strn)" stroke-width="3.4"/>
+<circle cx="214.6" cy="178" r="3.2" fill="#b8fbff"/>
+<circle cx="128" cy="228" r="15" fill="#39ddff" fill-opacity="0.14"/>
+<circle cx="128" cy="228" r="8.6" fill="#061f2c" stroke="url(#strn)" stroke-width="3.4"/>
+<circle cx="128" cy="228" r="3.2" fill="#b8fbff"/>
+<circle cx="41.4" cy="178" r="15" fill="#39ddff" fill-opacity="0.14"/>
+<circle cx="41.4" cy="178" r="8.6" fill="#061f2c" stroke="url(#strn)" stroke-width="3.4"/>
+<circle cx="41.4" cy="178" r="3.2" fill="#b8fbff"/>
+<circle cx="41.4" cy="78" r="15" fill="#39ddff" fill-opacity="0.14"/>
+<circle cx="41.4" cy="78" r="8.6" fill="#061f2c" stroke="url(#strn)" stroke-width="3.4"/>
+<circle cx="41.4" cy="78" r="3.2" fill="#b8fbff"/>
+<line x1="128" y1="68" x2="128" y2="39" stroke="#39ddff" stroke-opacity="0.75" stroke-width="1.8" stroke-dasharray="1 4.2" stroke-linecap="round"/>
+<circle cx="128" cy="55" r="2.2" fill="#b8fbff" filter="url(#glown)"/>
+<line x1="179.96" y1="98" x2="205.08" y2="83.5" stroke="#39ddff" stroke-opacity="0.75" stroke-width="1.8" stroke-dasharray="1 4.2" stroke-linecap="round"/>
+<circle cx="195.55" cy="89" r="2.2" fill="#b8fbff" filter="url(#glown)"/>
+<line x1="179.96" y1="158" x2="205.08" y2="172.5" stroke="#39ddff" stroke-opacity="0.75" stroke-width="1.8" stroke-dasharray="1 4.2" stroke-linecap="round"/>
+<circle cx="191.22" cy="164.5" r="2.2" fill="#b8fbff" filter="url(#glown)"/>
+<line x1="128" y1="188" x2="128" y2="217" stroke="#39ddff" stroke-opacity="0.75" stroke-width="1.8" stroke-dasharray="1 4.2" stroke-linecap="round"/>
+<circle cx="128" cy="206" r="2.2" fill="#b8fbff" filter="url(#glown)"/>
+<line x1="76.04" y1="158" x2="50.92" y2="172.5" stroke="#39ddff" stroke-opacity="0.75" stroke-width="1.8" stroke-dasharray="1 4.2" stroke-linecap="round"/>
+<circle cx="64.78" cy="164.5" r="2.2" fill="#b8fbff" filter="url(#glown)"/>
+<line x1="76.04" y1="98" x2="50.92" y2="83.5" stroke="#39ddff" stroke-opacity="0.75" stroke-width="1.8" stroke-dasharray="1 4.2" stroke-linecap="round"/>
+<circle cx="60.45" cy="89" r="2.2" fill="#b8fbff" filter="url(#glown)"/>
+<g filter="url(#glown)"><polygon points="128,76 173.03,102 128,128 82.97,102" fill="url(#topn)" stroke="#b8fbff" stroke-opacity="0.9" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="82.97,102 128,128 128,180 82.97,154" fill="url(#lefn)" stroke="#b8fbff" stroke-opacity="0.9" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="128,128 173.03,102 173.03,154 128,180" fill="url(#rign)" stroke="#b8fbff" stroke-opacity="0.9" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="128,85.88 155.92,102 128,118.12 100.08,102" fill="#061f2c" fill-opacity="0.3" stroke="#b8fbff" stroke-opacity="0.45" stroke-width="0.9" stroke-linejoin="round"/>
+<polygon points="91.52,116.82 119.44,132.94 119.44,165.18 91.52,149.06" fill="#061f2c" fill-opacity="0.34" stroke="#b8fbff" stroke-opacity="0.45" stroke-width="0.9" stroke-linejoin="round"/>
+<polygon points="136.56,132.94 164.48,116.82 164.48,149.06 136.56,165.18" fill="#061f2c" fill-opacity="0.4" stroke="#b8fbff" stroke-opacity="0.45" stroke-width="0.9" stroke-linejoin="round"/></g>
+<polygon points="128,93.5 135.36,97.75 135.36,106.25 128,110.5 120.64,106.25 120.64,97.75" fill="none" stroke="#061f2c" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="128" cy="102" r="2.2" fill="#061f2c"/>
+<line x1="98.48" y1="128.86" x2="112.48" y2="136.94" stroke="#b8fbff" stroke-opacity="0.85" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="100.48" y1="138.12" x2="110.48" y2="143.88" stroke="#b8fbff" stroke-opacity="0.85" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="99.48" y1="145.64" x2="111.48" y2="152.56" stroke="#b8fbff" stroke-opacity="0.85" stroke-width="2.2" stroke-linecap="round"/>
+<rect x="142.92" y="133.4" width="5.2" height="5.2" rx="1" fill="#b8fbff" fill-opacity="0.8" transform="skewY(-30) translate(0 83.96)"/>
+<rect x="152.92" y="127.4" width="5.2" height="5.2" rx="1" fill="#b8fbff" fill-opacity="0.8" transform="skewY(-30) translate(0 89.73)"/>
+<rect x="152.92" y="142.4" width="5.2" height="5.2" rx="1" fill="#b8fbff" fill-opacity="0.8" transform="skewY(-30) translate(0 89.73)"/>
 </svg>

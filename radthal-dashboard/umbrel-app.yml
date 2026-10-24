@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-dashboard
 category: bitcoin
 name: Radthal Dashboard
-version: "1.3.5"
+version: "1.3.6"
 tagline: Vue d'ensemble de Radthal
 description: >-
   Vue d'ensemble de la chaine Radthal : blocs, difficulte, puissance du reseau, solde du portefeuille, mempool et mineurs ckpool.
 releaseNotes: >-
-  L'explorateur de blocs n'affiche plus de texte illisible : les donnees binaires sont montrees en hexadecimal, et l'etiquette du mineur ne garde que le texte lisible. Le logo Radthal (la piece R) remplace le petit logo en haut a gauche de la page et dans l'onglet du navigateur. Rien d'autre ne change. Les pages se rechargent maintenant toutes seules apres une mise a jour : plus besoin d'actualiser a la main.
+  Le tableau de bord est plus rapide et plus fluide : la page repond tout de suite meme quand le noeud est occupe, ne montre plus a tort que le noeud est injoignable pendant une analyse, et demande moins de travail au noeud (soldes et puissance du reseau lus moins souvent, onglet cache en pause, surveillance des forks moins frequente). Rien d'autre ne change.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

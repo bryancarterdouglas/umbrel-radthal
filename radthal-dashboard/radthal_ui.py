@@ -9,6 +9,7 @@ fichiers de ckpool, et sert :
 La page interroge /api/state toutes les 3 secondes et met l'affichage a jour sans recharger.
 """
 import base64, glob, json, math, os, re, threading, time, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 try:
@@ -35,7 +36,18 @@ SUBTITLES = {"node": "L'état de ton nœud complet",
 
 # ---------------------------------------------------------------- acces au noeud
 
+_MS = {}      # methode -> (duree en ms du dernier appel, heure) : sert a /api/timing pour comprendre une lenteur
+
+
 def rpc(method, params=None, wallet=None, timeout=3):
+    t0 = time.time()
+    try:
+        return _rpc(method, params, wallet, timeout)
+    finally:
+        _MS[method] = (round((time.time() - t0) * 1000), t0)
+
+
+def _rpc(method, params=None, wallet=None, timeout=3):
     try:
         pw = open(PASSFILE).read().strip()
         auth = "Basic " + base64.b64encode((RPCUSER + ":" + pw).encode()).decode()
@@ -46,6 +58,26 @@ def rpc(method, params=None, wallet=None, timeout=3):
             return json.load(r)["result"]
     except Exception:
         return None
+
+
+_RC = {}      # cache de reponses du noeud : cle -> (heure, valeur)
+
+
+def rpc_cached(key, ttl, method, params=None, wallet=None, timeout=3):
+    """Comme rpc(), mais ne redemande au noeud qu'apres `ttl` secondes (les soldes et la puissance du reseau n'ont pas besoin
+    d'etre lus toutes les 3 secondes). Si le noeud est occupe, on garde l'ancienne valeur un moment plutot que d'afficher « - »."""
+    now = time.time()
+    e = _RC.get(key)
+    if e and now - e[0] < ttl:
+        return e[1]
+    r = rpc(method, params, wallet=wallet, timeout=timeout)
+    if r is not None:
+        _RC[key] = (now, r)
+        if len(_RC) > 40:                      # une entree « puissance du reseau » par bloc : on oublie les plus anciennes
+            for k in sorted(_RC, key=lambda k: _RC[k][0])[:20]:
+                _RC.pop(k, None)
+        return r
+    return e[1] if e and now - e[0] < ttl * 6 + 30 else None
 
 
 def rpc_batch(calls, wallet=None, timeout=60):
@@ -409,9 +441,9 @@ def miner_section(st, workers, nethash):
 FORK_WINDOW = 144     # on ne regarde que les branches des 144 derniers blocs (environ une journee)
 REF_DEPTH = 1000      # le bloc de reference conseille est environ 1 000 blocs sous la tete
 AHEAD_DELAY = 30      # une annonce de chaine plus longue ne compte qu'apres 30 s (sinon on voit un faux clignotement a chaque nouveau bloc)
-FORK_EVERY = int(os.environ.get("FORK_EVERY", "1800"))   # getchaintips renvoie TOUTES les branches que le noeud a connues (sur ta chaine :
-FORK_MIN = int(os.environ.get("FORK_MIN", "300"))       # plus de 470 000) : on l'appelle rarement, en arriere-plan, et on lit la reponse en flux.
-_FK = {"sec": None, "busy": False, "last": 0.0, "key": None, "ok_t": 0.0, "fail": 0, "dur": None, "n": None, "ahead_since": None}
+FORK_EVERY = int(os.environ.get("FORK_EVERY", "3600"))   # getchaintips renvoie TOUTES les branches que le noeud a connues (sur ta chaine :
+FORK_MIN = int(os.environ.get("FORK_MIN", "1800"))       # plus de 470 000) : on l'appelle rarement, en arriere-plan, et on lit la reponse en flux.
+_FK = {"sec": None, "busy": False, "last": 0.0, "key": None, "ok_t": 0.0, "fail": 0, "dur": None, "n": None, "ahead_since": None, "t0": None}
 _FK_LOCK = threading.Lock()     # protege les valeurs conseillees (advice_cached)
 _FKT_LOCK = threading.Lock()    # protege l'etat de l'analyse des forks (jamais tenu pendant un appel au noeud)
 
@@ -592,7 +624,9 @@ def fork_cached(info):
     dur = _FK["dur"] or 0
     every, lo = max(FORK_EVERY, 30 * dur), max(FORK_MIN, 10 * dur)
     with _FKT_LOCK:
-        if not _FK["busy"]:
+        if _FK["t0"] is None:
+            _FK["t0"] = now                       # la 1re analyse attend 20 s : la page s'affiche d'abord, sans concurrence
+        if not _FK["busy"] and (_FK["last"] != 0.0 or now - _FK["t0"] >= 20):
             gap = now - _FK["last"]
             if _FK["last"] == 0.0 or gap >= every or (key != _FK["key"] and gap >= lo) or (_FK["fail"] and gap >= lo):
                 _FK["busy"], _FK["last"], _FK["key"] = True, now, key
@@ -923,6 +957,9 @@ def common_cards(info, nh, mine_txs):
     ]
 
 
+_POOL = ThreadPoolExecutor(max_workers=8)
+
+
 def view_dashboard():
     info = rpc("getblockchaininfo") or {}
     secs = []
@@ -933,11 +970,17 @@ def view_dashboard():
         secs.append(miner_section(st, workers, 0))
         return secs, info
     mine = wallet_blocks()
-    mp = rpc("getmempoolinfo") or {}
-    net = rpc("getnetworkinfo") or {}
-    bal = (rpc("getbalances", wallet=WALLET) or {}).get("mine", {})
-    nh = rpc("getnetworkhashps", [30]) or 0
-    secs.append(blocks_section(info.get("blocks"), mine))
+    # les appels independants partent ensemble : la page attend le plus lent, pas la somme
+    f_mp = _POOL.submit(rpc, "getmempoolinfo")
+    f_net = _POOL.submit(rpc, "getnetworkinfo")
+    f_bal = _POOL.submit(rpc_cached, "bal", 10, "getbalances", None, WALLET)
+    f_nh = _POOL.submit(rpc_cached, ("nh", info.get("bestblockhash")), 120, "getnetworkhashps", [30])
+    f_blk = _POOL.submit(blocks_section, info.get("blocks"), mine)
+    mp = f_mp.result() or {}
+    net = f_net.result() or {}
+    bal = (f_bal.result() or {}).get("mine", {})
+    nh = f_nh.result() or 0
+    secs.append(f_blk.result())
     fk = fork_cached(info)
     if fk:
         secs.append(fk)
@@ -1125,8 +1168,10 @@ def view_ckpool():
 
 VIEWS = {"node": view_node, "dashboard": view_dashboard, "mempool": view_mempool, "ckpool": view_ckpool}
 
-_cache = {"t": 0.0, "data": None}
-_lock = threading.Lock()
+_cache = {"t": 0.0, "data": None, "busy": False}
+_lock = threading.Lock()          # protege _cache ; jamais tenu pendant un appel au noeud
+_GOOD = {"t": 0.0, "d": None}     # dernier affichage complet : evite le faux « noeud injoignable » quand le noeud est juste occupe
+_BUILD = {"ms": None, "at": 0.0}
 
 
 def build_state():
@@ -1139,16 +1184,50 @@ def build_state():
         err = None
     except Exception as e:           # ne jamais planter la page
         secs, info, tip, err = [note("err", "Erreur interne : %s" % e, "bad")], {}, None, str(e)
-    return {"view": VIEW, "title": TITLES.get(VIEW, "Radthal"), "subtitle": SUBTITLES.get(VIEW, ""),
-            "ok": bool(info), "now": time.time(), "error": err, "sections": secs}
+    st = {"view": VIEW, "title": TITLES.get(VIEW, "Radthal"), "subtitle": SUBTITLES.get(VIEW, ""),
+          "ok": bool(info), "now": time.time(), "error": err, "sections": secs}
+    if st["ok"]:
+        _GOOD["t"], _GOOD["d"] = time.time(), st
+    elif _GOOD["d"] is not None and err is None and time.time() - _GOOD["t"] < 45:
+        return _GOOD["d"]            # le noeud ne repond pas a temps : on garde l'affichage precedent (45 s au plus)
+    return st
+
+
+def _refresh():
+    t0 = time.time()
+    try:
+        d = build_state()
+        with _lock:
+            _cache["data"], _cache["t"] = d, time.time()
+        _BUILD["ms"], _BUILD["at"] = round((time.time() - t0) * 1000), time.time()
+    finally:
+        with _lock:
+            _cache["busy"] = False
 
 
 def get_state():
+    """Repond TOUT DE SUITE avec le dernier calcul (au plus 2 a 3 s) et lance le suivant en arriere-plan : la page ne dépend plus
+    de la vitesse du noeud. Seul le tout premier affichage (ou un retour apres plus de 15 s) attend un calcul frais."""
     with _lock:
-        if _cache["data"] is None or time.time() - _cache["t"] > 2.0:
-            _cache["data"] = build_state()
-            _cache["t"] = time.time()
-        return _cache["data"]
+        d, age = _cache["data"], time.time() - _cache["t"]
+        if d is not None and age <= 2.0:
+            return d
+        start = not _cache["busy"]
+        if start:
+            _cache["busy"] = True
+    if d is not None and age <= 15.0:
+        if start:
+            threading.Thread(target=_refresh, daemon=True).start()
+        return d
+    if start:
+        _refresh()
+    else:
+        for _ in range(400):
+            time.sleep(0.05)
+            with _lock:
+                if not _cache["busy"]:
+                    break
+    return _cache["data"] if _cache["data"] is not None else build_state()
 
 
 # ---------------------------------------------------------------- page
@@ -1443,7 +1522,7 @@ R.miner=(rec,d)=>{
   right.append(rec.st,rec.big,rec.tries,rec.foot);rec.box.append(left,right);rec.el.append(rec.box);
   rec.hl=$("div","");rec.hl.style.whiteSpace="pre";rec.hl.textContent=[rhash(),rhash(),rhash()].join("\n");
   rec.hashes.append(rec.hl,$("small","","illustration : les nombres essayés, le vrai compte est à droite"));
-  rec.timer=setInterval(()=>{if(rec.state!=="on"||reduce||document.hidden)return;rec.hl.textContent=[rhash(),rhash(),rhash()].join("\n");},110);
+  rec.timer=setInterval(()=>{if(rec.state!=="on"||reduce||document.hidden)return;rec.hl.textContent=[rhash(),rhash(),rhash()].join("\n");},250);
  }
  rec.state=d.state;rec.box.className="miner "+d.state;rec.st.lastChild.textContent=d.label;
  rec.big.style.display=d.state==="off"?"none":"";
@@ -1722,7 +1801,7 @@ async function poll(){
 }
 setInterval(()=>{document.querySelectorAll("[data-age]").forEach(e=>{e.textContent=ago(+e.dataset.age);});
  const u=document.getElementById("upd");if(lastOk)u.textContent="mis à jour il y a "+Math.max(0,Math.round((Date.now()-lastOk)/1000))+" s";},1000);
-poll();setInterval(poll,3000);
+poll();setInterval(()=>{if(!document.hidden)poll();},3000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll();});
 </script></body></html>
 """
@@ -1748,7 +1827,13 @@ class H(BaseHTTPRequestHandler):
             self._send(200, json.dumps(xp_api(path, urllib.parse.parse_qs(sp.query[:600])), ensure_ascii=False).encode("utf-8"),
                        "application/json; charset=utf-8")
         elif path == "/api/state":
-            self._send(200, json.dumps(dict(get_state(), ui=UI_VER), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+            self._send(200, json.dumps(dict(get_state(), now=time.time(), ui=UI_VER), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+        elif path == "/api/timing":
+            t = time.time()
+            info = {"calcul_page_ms": _BUILD["ms"], "calcul_il_y_a_s": round(t - _BUILD["at"], 1) if _BUILD["at"] else None,
+                    "reponses_du_noeud_ms": {m: {"ms": v[0], "il_y_a_s": round(t - v[1], 1)} for m, v in sorted(_MS.items(), key=lambda x: -x[1][0])},
+                    "analyse_forks": {"duree_s": _FK["dur"], "branches_connues": _FK["n"], "en_cours": _FK["busy"]}}
+            self._send(200, json.dumps(info, ensure_ascii=False, indent=1).encode("utf-8"), "application/json; charset=utf-8")
         elif path in ("/", "/index.html"):
             self._send(200, page(), "text/html; charset=utf-8")
         else:

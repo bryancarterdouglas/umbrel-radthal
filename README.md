@@ -1,5 +1,7 @@
 # Umbrel-radthal : pages Umbrel pour un nœud Radthal
 
+🇬🇧 [English version](README.en.md)
+
 Six petites applications web pour [Umbrel](https://umbrel.com) qui permettent de **voir et d'utiliser un nœud [Radthal](https://github.com/bryancarterdouglas/radthal)** sans ligne de commande. Radthal est un fork expérimental de Bitcoin Core : voir le dépôt principal pour ce que c'est, ses règles (dont la part de 2 % du créateur à partir du bloc 25 000) et ses avertissements.
 
 > **Ce n'est pas une installation en un clic.** Ces applications ont été faites pour le Raspberry Pi de l'auteur : elles lisent des fichiers à des emplacements précis de ce Pi (voir [Ce que les applications supposent](#ce-que-les-applications-supposent)). Si tu veux simplement **faire tourner un nœud**, suis le README de [radthal](https://github.com/bryancarterdouglas/radthal) (Docker, sans Umbrel). Ces pages sont un confort en plus, pour qui a déjà un Umbrel et un nœud Radthal.
@@ -56,10 +58,6 @@ Si ta disposition est différente, il faut adapter ces chemins dans les fichiers
 ## Problème ou question
 
 Ouvre une « issue » sur ce dépôt. Radthal est un projet expérimental, sans aucune garantie, sans valeur promise et sans lien avec Bitcoin ni avec ses développeurs.
-
-## English
-
-Six small web apps for [Umbrel](https://umbrel.com) to view and use a [Radthal](https://github.com/bryancarterdouglas/radthal) node (an experimental Bitcoin Core fork): node status, dashboard, mempool, ckpool stats, wallet (with short on-chain messages) and document timestamping. **This is not a one-click install**: the apps were built for the author's Raspberry Pi and read the node's RPC (port 9332) and files at fixed paths (see the table above). To simply run a node, follow the Docker instructions in the main repository. To add the store: App Store → ⋯ (top right) → Community App Stores → paste `https://github.com/bryancarterdouglas/Umbrel-radthal`. Community stores are not vetted by Umbrel. The pages are plain HTTP for the local network: never expose them to the Internet. Experimental software, no warranty, no affiliation with Bitcoin.
 
 ## Licence
 

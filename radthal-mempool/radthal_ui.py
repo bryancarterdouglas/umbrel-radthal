@@ -10,6 +10,12 @@ La page interroge /api/state toutes les 3 secondes et met l'affichage a jour san
 """
 import base64, glob, json, math, os, re, threading, time, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
+try:
+    # identifiant de cette version du programme : change tout seul a chaque mise a jour du fichier
+    UI_VER = hashlib.sha1(open(__file__, "rb").read()).hexdigest()[:12]
+except Exception:
+    UI_VER = "0"
 
 VIEW = os.environ.get("VIEW", "dashboard")
 RPC = os.environ.get("RPC", "http://radthal-host:9332")
@@ -557,13 +563,31 @@ def _clean(s, n=300):
 
 
 def coinbase_tag(hx):
-    """Le texte lisible de la coinbase (souvent le nom du pool) ; vide si ce n'est que du binaire."""
+    """Le texte lisible de la coinbase (souvent le nom du pool) ; vide si ce n'est que du binaire.
+    On ne garde que les passages d'au moins 4 caracteres imprimables contenant des lettres : les octets binaires
+    (hauteur du bloc, nombres aleatoires) ne produisent plus de petits morceaux illisibles."""
     try:
         raw = bytes.fromhex(hx or "")
     except Exception:
         return ""
-    t = re.sub(r"[^\x20-\x7e]+", " ", raw.decode("latin-1")).strip()
-    return t[:120] if len(re.sub(r"[^A-Za-z]", "", t)) >= 3 else ""
+    runs = re.findall(rb"[\x20-\x7e]{4,}", raw)
+    keep = [r.decode("ascii").strip() for r in runs if len(re.findall(rb"[A-Za-z]", r)) >= 3]
+    return " ".join(k for k in keep if k)[:120]
+
+
+def _readable(data):
+    """Le texte si ces octets en sont vraiment (UTF-8 valide, caracteres imprimables), sinon None.
+    Avant, decode(..., "replace") remplacait chaque octet binaire par un caractere imprimable : de l'illisible etait affiche."""
+    try:
+        txt = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if not txt or "\ufffd" in txt:
+        return None
+    ok = sum(1 for ch in txt if ch.isprintable() or ch in " \n")
+    if ok < len(txt) or not any(ch.isalnum() for ch in txt):
+        return None
+    return txt
 
 
 def opreturn_text(spk):
@@ -571,10 +595,13 @@ def opreturn_text(spk):
     data = b"".join(bytes.fromhex(p) for p in parts)
     if not data:
         return {"label": "Donnée vide", "text": ""}
-    txt = data.decode("utf-8", "replace")
-    printable = sum(1 for ch in txt if ch.isprintable() or ch in " \n")
-    if printable < 0.8 * len(txt):
-        return {"label": "Donnée (OP_RETURN)", "text": "hex : " + data.hex()[:160]}
+    if data[:4] == b"RDTS" and len(data) == 36:
+        return {"label": "Horodatage Radthal", "text": "empreinte SHA-256 : " + data[4:].hex()}
+    if data[:4] == bytes.fromhex("aa21a9ed"):
+        return {"label": "Donnée technique du bloc (SegWit)", "text": "hex : " + data.hex()[:160]}
+    txt = _readable(data)
+    if txt is None:
+        return {"label": "Donnée binaire (OP_RETURN)", "text": "hex : " + data.hex()[:160]}
     if txt.startswith("RDTM"):
         return {"label": "Message Radthal", "text": _clean(txt[4:])}
     return {"label": "Donnée (OP_RETURN)", "text": _clean(txt)}
@@ -1565,11 +1592,31 @@ function xpMine(d){
  if(location.hash)xpRoute();
 })();
 
+const UI_VER="__UIVER__";
+function uiBusy(){
+ const a=document.activeElement;
+ if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT"))return true;
+ return [...document.querySelectorAll("input,textarea")].some(e=>e.offsetParent!==null&&(e.type==="file"?(e.files&&e.files.length>0):(e.type==="checkbox"||e.type==="radio"||e.type==="button"||e.type==="submit")?false:e.value!==e.defaultValue));
+}
+function uiNew(){
+ /* nouvelle version installee : on recharge la page, sauf si tu es en train de saisir quelque chose */
+ if(uiBusy()){
+  if(!document.getElementById("uibar")){
+   const b=document.createElement("div");b.id="uibar";
+   b.style.cssText="position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99999;background:#131a2c;border:2px solid #ff7a2f;color:#f2f4f8;border-radius:14px;padding:12px 18px;font:600 15px system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5);cursor:pointer;max-width:92vw;text-align:center";
+   b.textContent="Nouvelle version installée : touche ici pour recharger (rechargement automatique dès que tu as fini de saisir)";
+   b.onclick=()=>location.reload();document.body.appendChild(b);
+  }
+  return false;
+ }
+ try{const t=+sessionStorage.getItem("uiRl")||0;if(Date.now()-t<15000)return false;sessionStorage.setItem("uiRl",String(Date.now()));}catch(e){}
+ location.reload();return true;
+}
 function setPill(ok,txt){const p=document.getElementById("pill");p.className="pill "+(ok?"ok":"ko");document.getElementById("pilltx").textContent=txt;}
 async function poll(){
  try{
   const r=await fetch("api/state",{cache:"no-store"});if(!r.ok)throw new Error(r.status);
-  const s=await r.json();offset=s.now-Date.now()/1000;lastOk=Date.now();
+  const s=await r.json();if(s.ui&&s.ui!==UI_VER&&uiNew())return;offset=s.now-Date.now()/1000;lastOk=Date.now();
   document.getElementById("sub").textContent=s.subtitle||"";
   if(s.view==="ckpool"){const m=s.sections.find(x=>x.type==="miner");setPill(m&&m.state==="on",m?m.label:"ckpool");}
   else setPill(s.ok,s.ok?"Nœud en marche":"Nœud injoignable");
@@ -1585,7 +1632,7 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll();});
 
 
 def page():
-    return (HTML.replace("__TITLE__", TITLES.get(VIEW, "Radthal")).replace("__VIEW__", VIEW)).encode("utf-8")
+    return (HTML.replace("__TITLE__", TITLES.get(VIEW, "Radthal")).replace("__VIEW__", VIEW).replace("__UIVER__", UI_VER)).encode("utf-8")
 
 
 class H(BaseHTTPRequestHandler):
@@ -1604,7 +1651,7 @@ class H(BaseHTTPRequestHandler):
             self._send(200, json.dumps(xp_api(path, urllib.parse.parse_qs(sp.query[:600])), ensure_ascii=False).encode("utf-8"),
                        "application/json; charset=utf-8")
         elif path == "/api/state":
-            self._send(200, json.dumps(get_state(), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+            self._send(200, json.dumps(dict(get_state(), ui=UI_VER), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
         elif path in ("/", "/index.html"):
             self._send(200, page(), "text/html; charset=utf-8")
         else:

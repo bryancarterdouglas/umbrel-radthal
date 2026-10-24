@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-mempool
 category: bitcoin
 name: Radthal Mempool
-version: "1.2.1"
+version: "1.2.3"
 tagline: Mempool et blocs de Radthal
 description: >-
   Transactions en attente, repartition des frais et derniers blocs de la chaine Radthal.
 releaseNotes: >-
-  Le logo Radthal (la piece R) remplace le petit logo en haut a gauche de la page et dans l'onglet du navigateur. Rien d'autre ne change.
+  L'explorateur de blocs n'affiche plus de texte illisible : les donnees binaires sont montrees en hexadecimal, et l'etiquette du mineur ne garde que le texte lisible. Le logo Radthal (la piece R) remplace le petit logo en haut a gauche de la page et dans l'onglet du navigateur. Rien d'autre ne change. Les pages se rechargent maintenant toutes seules apres une mise a jour : plus besoin d'actualiser a la main.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

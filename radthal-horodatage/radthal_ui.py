@@ -12,6 +12,12 @@ La page interroge /api/state toutes les 3 secondes et met l'affichage a jour san
 import base64, glob, json, math, os, re, secrets, threading, time, urllib.error, urllib.parse, urllib.request
 from decimal import Decimal, ROUND_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
+try:
+    # identifiant de cette version du programme : change tout seul a chaque mise a jour du fichier
+    UI_VER = hashlib.sha1(open(__file__, "rb").read()).hexdigest()[:12]
+except Exception:
+    UI_VER = "0"
 
 VIEW = os.environ.get("VIEW", "dashboard")
 RPC = os.environ.get("RPC", "http://radthal-host:9332")
@@ -1812,11 +1818,31 @@ order(root,els);
  for(const k in reg){const r=reg[k];if(r.scrollEnd){r.band.style.scrollBehavior=r.scrollEnd;r.band.scrollLeft=r.band.scrollWidth;r.scrollEnd=null;}}
 }
 
+const UI_VER="__UIVER__";
+function uiBusy(){
+ const a=document.activeElement;
+ if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT"))return true;
+ return [...document.querySelectorAll("input,textarea")].some(e=>e.offsetParent!==null&&(e.type==="file"?(e.files&&e.files.length>0):(e.type==="checkbox"||e.type==="radio"||e.type==="button"||e.type==="submit")?false:e.value!==e.defaultValue));
+}
+function uiNew(){
+ /* nouvelle version installee : on recharge la page, sauf si tu es en train de saisir quelque chose */
+ if(uiBusy()){
+  if(!document.getElementById("uibar")){
+   const b=document.createElement("div");b.id="uibar";
+   b.style.cssText="position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99999;background:#131a2c;border:2px solid #ff7a2f;color:#f2f4f8;border-radius:14px;padding:12px 18px;font:600 15px system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5);cursor:pointer;max-width:92vw;text-align:center";
+   b.textContent="Nouvelle version installée : touche ici pour recharger (rechargement automatique dès que tu as fini de saisir)";
+   b.onclick=()=>location.reload();document.body.appendChild(b);
+  }
+  return false;
+ }
+ try{const t=+sessionStorage.getItem("uiRl")||0;if(Date.now()-t<15000)return false;sessionStorage.setItem("uiRl",String(Date.now()));}catch(e){}
+ location.reload();return true;
+}
 function setPill(ok,txt){const p=document.getElementById("pill");p.className="pill "+(ok?"ok":"ko");document.getElementById("pilltx").textContent=txt;}
 async function poll(){
  try{
   const r=await fetch("api/state",{cache:"no-store"});if(!r.ok)throw new Error(r.status);
-  const s=await r.json();offset=s.now-Date.now()/1000;lastOk=Date.now();
+  const s=await r.json();if(s.ui&&s.ui!==UI_VER&&uiNew())return;offset=s.now-Date.now()/1000;lastOk=Date.now();
   document.getElementById("sub").textContent=s.subtitle||"";
   if(s.view==="ckpool"){const m=s.sections.find(x=>x.type==="miner");setPill(m&&m.state==="on",m?m.label:"ckpool");}
   else setPill(s.ok,s.ok?"Nœud en marche":"Nœud injoignable");
@@ -1832,7 +1858,7 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll();});
 
 
 def page():
-    return (HTML.replace("__TITLE__", TITLES.get(VIEW, "Radthal")).replace("__VIEW__", VIEW)).encode("utf-8")
+    return (HTML.replace("__TITLE__", TITLES.get(VIEW, "Radthal")).replace("__VIEW__", VIEW).replace("__UIVER__", UI_VER)).encode("utf-8")
 
 
 class H(BaseHTTPRequestHandler):
@@ -1849,7 +1875,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/state":
-            self._send(200, json.dumps(get_state(), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+            self._send(200, json.dumps(dict(get_state(), ui=UI_VER), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
         elif path in ("/", "/index.html"):
             self._send(200, page(), "text/html; charset=utf-8")
         elif VIEW == "stamp" and path == "/registre.json":

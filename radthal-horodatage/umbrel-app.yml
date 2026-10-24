@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-horodatage
 category: bitcoin
 name: Radthal Horodatage
-version: "1.0.1"
+version: "1.0.2"
 tagline: Prouve qu'un document existait a une date precise
 description: >-
   Horodatage Radthal : tu deposes un fichier ou un texte, la page calcule son empreinte SHA-256 sur ton appareil (le document ne la quitte jamais) et l'ecrit dans la chaine Radthal par une transaction de quelques frais. Quand un bloc la contient, l'empreinte porte la date de ce bloc. Tu peux ensuite telecharger un certificat et verifier a tout moment qu'un document est identique a celui qui a ete horodate. Les cles restent dans le noeud, cette page ne les voit jamais.
 releaseNotes: >-
-  Le logo Radthal (la piece R) remplace le petit logo en haut a gauche de la page et dans l'onglet du navigateur. Rien d'autre ne change.
+  Le logo Radthal (la piece R) remplace le petit logo en haut a gauche de la page et dans l'onglet du navigateur. Rien d'autre ne change. Les pages se rechargent maintenant toutes seules apres une mise a jour : plus besoin d'actualiser a la main.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

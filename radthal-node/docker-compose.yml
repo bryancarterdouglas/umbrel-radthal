@@ -16,7 +16,9 @@ services:
     network_mode: host
     # bitcoind a besoin de temps pour sauvegarder son etat a l'arret
     stop_grace_period: 2m
-    command: ["/build/bin/bitcoind", "-datadir=/data", "-printtoconsole"]
+    # -maxtipage : sans lui, apres plus de 24 h sans nouveau bloc (coupure de courant, mineurs eteints) le noeud se croit
+    # "en synchronisation initiale" et refuse de donner du travail aux mineurs. Ici il ne se croit jamais en retard.
+    command: ["/build/bin/bitcoind", "-datadir=/data", "-printtoconsole", "-maxtipage=315360000"]
     # Une seule zone de memoire (glibc) : sans ca, chaque grosse lecture (analyse des branches du Tableau de bord)
     # laisse des centaines de Mo "libres mais gardes" dans une zone differente, et le noeud gonfle sans fin.
     # Teste : meme nombre de branches, memoire stable apres 16 analyses de suite au lieu de +5 Go.

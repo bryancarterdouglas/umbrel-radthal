@@ -18,7 +18,10 @@ services:
     stop_grace_period: 2m
     # -maxtipage : sans lui, apres plus de 24 h sans nouveau bloc (coupure de courant, mineurs eteints) le noeud se croit
     # "en synchronisation initiale" et refuse de donner du travail aux mineurs. Ici il ne se croit jamais en retard.
-    command: ["/build/bin/bitcoind", "-datadir=/data", "-printtoconsole", "-maxtipage=315360000"]
+    # -minimumchainwork : un nouveau noeud reste "en synchronisation" tant qu'il n'a pas rattrape ce niveau de travail
+    # cumule (valeur d'un bloc ~1 000 blocs sous la tete, relevee sur le tableau de bord le 25/10/2026).
+    command: ["/build/bin/bitcoind", "-datadir=/data", "-printtoconsole", "-maxtipage=315360000",
+              "-minimumchainwork=000000000000000000000000000000000000000000000000278424e424e42244"]
     # Une seule zone de memoire (glibc) : sans ca, chaque grosse lecture (analyse des branches du Tableau de bord)
     # laisse des centaines de Mo "libres mais gardes" dans une zone differente, et le noeud gonfle sans fin.
     # Teste : meme nombre de branches, memoire stable apres 16 analyses de suite au lieu de +5 Go.

@@ -22,6 +22,29 @@ VIEW = os.environ.get("VIEW", "dashboard")
 RPC = os.environ.get("RPC", "http://radthal-host:9332")
 RPCUSER = os.environ.get("RPCUSER", "radthal")
 PASSFILE = os.environ.get("PASSFILE", "/run/secrets/radthal_rpc_password")
+
+
+SHOW_PEER_ADDR = os.environ.get("SHOW_PEER_ADDR", "0") == "1"       # 1 = montrer les adresses completes (a eviter si tu partages une capture)
+
+
+def peer_addr(a):
+    """Adresse d'un pair, SANS le port et en partie masquee (203.0.x.x), pour qu'une capture d'ecran ne montre
+    ni ton adresse ni celle des autres. SHOW_PEER_ADDR=1 affiche l'adresse complete."""
+    a = str(a or "")
+    if SHOW_PEER_ADDR or not a:
+        return a
+    if a.startswith("127.") or a.startswith("[::1]"):
+        return "cet appareil"                  # un programme de ta machine (mineur, page web...)
+    m = re.fullmatch(r"(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}(?::\d+)?", a)
+    if m:
+        return "%s.%s.x.x" % m.groups()
+    m = re.fullmatch(r"\[([0-9a-fA-F:.]+)\](?::\d+)?", a)
+    if m:
+        return ":".join(m.group(1).split(":")[:2]) + ":…"
+    m = re.fullmatch(r"([a-z0-9]{6})[a-z0-9]*(\.onion|\.b32\.i2p)(?::\d+)?", a)
+    if m:
+        return m.group(1) + "…" + m.group(2)
+    return "(masquée)"
 LOGS = os.environ.get("LOGS", "/ckpool/logs")
 PORT = int(os.environ.get("PORT", "8000"))
 WALLET = os.environ.get("WALLET", "minage")
@@ -1035,7 +1058,7 @@ def view_node():
     if warn:
         secs.append(note("warn", "Avertissement du nœud : " + str(warn), "warn"))
     secs.append(table("peers", "Pairs connectés", ["Adresse", "Version", "Sens", "Reçu", "Envoyé", "Connecté depuis"], [
-        [p.get("addr"), str(p.get("subver", "")).strip("/"), "entrant" if p.get("inbound") else "sortant",
+        [peer_addr(p.get("addr")), str(p.get("subver", "")).strip("/"), "entrant" if p.get("inbound") else "sortant",
          fsize(p.get("bytesrecv")), fsize(p.get("bytessent")), {"age": p.get("conntime")}]
         for p in peers], "Aucun pair connecté pour l'instant."))
     secs.append(kv("ports", "Ports", [["P2P (réseau)", "9333"], ["RPC (local)", "9332"], ["Stratum (mineurs)", STRATUM]]))

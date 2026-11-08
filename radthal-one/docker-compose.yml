@@ -1,18 +1,21 @@
 version: "3.7"
 
-# Radthal tout-en-un : le noeud et sa page d'etat, sans rien d'autre a installer ni a copier sur l'Umbrel.
+# Radthal tout-en-un : le noeud et toutes ses pages (noeud, tableau de bord, mempool, portefeuille, horodatage),
+# sans rien d'autre a installer ni a copier sur l'Umbrel.
 # Les deux programmes viennent d'images toutes faites (ghcr.io/bryancarterdouglas), la version est fixee ici :
 # une nouvelle version de l'application = de nouvelles images.
 services:
   app_proxy:
     environment:
-      # la page partage le reseau du noeud (service "web" plus bas) : c'est donc le conteneur du noeud qui repond au port 3777
+      # les pages partagent le reseau du noeud (service "web" plus bas) : c'est donc le conteneur du noeud qui repond
+      # au port du menu (3790). Les pages elles-memes n'ecoutent qu'en local : on n'arrive a elles que par ce menu,
+      # donc apres le mot de passe d'Umbrel (important : la page Portefeuille peut envoyer des RDT).
       APP_HOST: radthal-one_node_1
-      APP_PORT: 3777
+      APP_PORT: 3790
 
   # Prepare les dossiers de donnees (ils appartiennent au programme du noeud, utilisateur 1000), puis s'arrete.
   init:
-    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.2
+    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.3
     user: "0:0"
     restart: "no"
     command: ["sh", "-c", "mkdir -p /data /state && chown 1000:1000 /data /state && chmod 700 /data"]
@@ -22,7 +25,7 @@ services:
 
   # Le noeud Radthal (bitcoind). Seul le port du reseau (9333) est ouvert : le RPC reste a l'interieur.
   node:
-    image: ghcr.io/bryancarterdouglas/radthal:0.1.2
+    image: ghcr.io/bryancarterdouglas/radthal:0.1.3
     user: "1000:1000"
     restart: on-failure
     # bitcoind a besoin de temps pour sauvegarder son etat a l'arret
@@ -47,9 +50,9 @@ services:
       - -minimumchainwork=000000000000000000000000000000000000000000000000278424e424e42244   # un noeud neuf reste "en synchronisation" tant qu'il n'a pas rattrape la chaine
       - -addnode=radthal-seed.duckdns.org:9333
 
-  # La page du noeud : meme reseau que le noeud (elle lui parle en local) ; elle lit son cookie RPC en lecture seule.
+  # Les pages : meme reseau que le noeud (elles lui parlent en local) ; elles lisent son cookie RPC en lecture seule.
   web:
-    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.2
+    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.3
     user: "1000:1000"
     restart: on-failure
     stop_grace_period: 5s
@@ -60,11 +63,15 @@ services:
       - ${APP_DATA_DIR}/data:/data:ro
       - ${APP_DATA_DIR}/ui:/state
     environment:
-      VIEWS: node
+      VIEWS: node,dashboard,mempool,wallet,stamp
+      HUB_PORT: "3790"
       DEVICE: pc
       DOWN_HINT: "dans Umbrel"
       RPC: http://127.0.0.1:8332
       PASSFILE: /data/.cookie
       WALLET: monportefeuille
+      BACKUP_DIR: /data
+      BACKUP_SHOW: "~/umbrel/app-data/radthal-one/data (sur ton Umbrel)"
       STATE_DIR: /state
+      STATE_SHOW: "~/umbrel/app-data/radthal-one/ui (sur ton Umbrel)"
       SEED_NODE: radthal-seed.duckdns.org:9333

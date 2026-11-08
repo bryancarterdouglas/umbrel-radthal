@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-one
 category: bitcoin
 name: Radthal
-version: "0.1.0"
-tagline: Noeud complet Radthal, pret a l'emploi
+version: "0.2.0"
+tagline: Noeud complet Radthal et ses pages, pret a l'emploi
 description: >-
-  Un noeud complet Radthal (fork experimental de Bitcoin Core) qui s'installe en un clic : rien a compiler, rien a copier sur l'Umbrel. L'application lance le noeud et affiche son etat : blocs, synchronisation, difficulte, pairs connectes (avec un pseudo, jamais leur adresse), ports. Si tu as deja un noeud Radthal sur cet Umbrel (les applications Radthal Node, Dashboard, Wallet...), arrete-le avant d'installer celle-ci : les deux ne peuvent pas utiliser le meme port 9333.
+  Un noeud complet Radthal (fork experimental de Bitcoin Core) qui s'installe en un clic : rien a compiler, rien a copier sur l'Umbrel. L'application lance le noeud et ses pages, avec un menu en haut : Noeud (blocs, synchronisation, pairs avec un pseudo, jamais leur adresse), Tableau de bord, Mempool, Portefeuille (recevoir et envoyer des RDT) et Horodatage. Si tu as deja un noeud Radthal sur cet Umbrel (les applications Radthal Node, Dashboard, Wallet...), arrete-le avant d'installer celle-ci : les deux ne peuvent pas utiliser le meme port 9333.
 releaseNotes: >-
-  Premiere version : le noeud Radthal et sa page d'etat, installes depuis des images toutes faites.
+  Toutes les pages sont maintenant dans l'application, avec un menu en haut : Noeud, Tableau de bord, Mempool, Portefeuille et Horodatage. Les pages ne sont joignables qu'apres le mot de passe d'Umbrel. L'application s'ouvre maintenant sur le port 3790 du menu ; le noeud et ses donnees ne changent pas. Le noeud peut redemarrer pendant la mise a jour (environ 2 minutes).
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

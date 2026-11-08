@@ -6,6 +6,13 @@ Six petites applications web pour [Umbrel](https://umbrel.com) qui permettent de
 
 > **Ce n'est pas une installation en un clic.** Ces applications ont été faites pour le Raspberry Pi de l'auteur : elles lisent des fichiers à des emplacements précis de ce Pi (voir [Ce que les applications supposent](#ce-que-les-applications-supposent)). Si tu veux simplement **faire tourner un nœud**, suis le README de [radthal](https://github.com/bryancarterdouglas/radthal) (Docker, sans Umbrel). Ces pages sont un confort en plus, pour qui a déjà un Umbrel et un nœud Radthal.
 
+## Nouveau : l'application « Radthal » (en test)
+
+Une application **autonome** : elle lance le nœud et sa page d'état depuis des images toutes faites, sans rien compiler ni copier sur l'Umbrel.
+Installe **Radthal** (et non « Radthal Node ») depuis cette boutique. Première version, **encore en test** : pour l'instant elle ne contient que
+le nœud et la page Nœud (les autres pages viennent ensuite). Si tu as déjà un nœud Radthal sur cet Umbrel (les applications ci-dessous), arrête-le
+avant : les deux ne peuvent pas utiliser le même port 9333.
+
 ## Les applications
 
 | Application | Port | Rôle |

@@ -6,6 +6,13 @@ Six small web apps for [Umbrel](https://umbrel.com) that let you **view and use 
 
 > **This is not a one-click install.** These apps were made for the author's Raspberry Pi: they read files at specific locations on that Pi (see [What the apps assume](#what-the-apps-assume)). If you simply want to **run a node**, follow the README of [radthal](https://github.com/bryancarterdouglas/radthal) (Docker, no Umbrel needed; there is an [English version](https://github.com/bryancarterdouglas/radthal/blob/main/README.en.md)). These pages are an extra comfort for people who already have an Umbrel and a Radthal node.
 
+## New: the "Radthal" app (testing)
+
+A **self-contained** app: it runs the node and its status page from ready-made images, with nothing to compile or copy onto the Umbrel.
+Install **Radthal** (not "Radthal Node") from this store. First version, **still being tested**: for now it only contains the node and the
+Node page (the other pages come next). If you already have a Radthal node on this Umbrel (the apps below), stop it first: the two cannot
+use the same port 9333.
+
 ## The apps
 
 | App | Port | What it does |

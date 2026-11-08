@@ -9,8 +9,8 @@ Six small web apps for [Umbrel](https://umbrel.com) that let you **view and use 
 ## New: the "Radthal" app (testing)
 
 A **self-contained** app: it runs the node and its status page from ready-made images, with nothing to compile or copy onto the Umbrel.
-Install **Radthal** (not "Radthal Node") from this store. First version, **still being tested**: for now it only contains the node and the
-Node page (the other pages come next). If you already have a Radthal node on this Umbrel (the apps below), stop it first: the two cannot
+Install **Radthal** (not "Radthal Node") from this store. It contains the node and all its pages (Node, Dashboard, Mempool,
+Wallet, Timestamping) behind a menu bar, protected by the Umbrel password. **Still being tested.** If you already have a Radthal node on this Umbrel (the apps below), stop it first: the two cannot
 use the same port 9333.
 
 ## The apps

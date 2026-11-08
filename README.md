@@ -9,8 +9,8 @@ Six petites applications web pour [Umbrel](https://umbrel.com) qui permettent de
 ## Nouveau : l'application « Radthal » (en test)
 
 Une application **autonome** : elle lance le nœud et sa page d'état depuis des images toutes faites, sans rien compiler ni copier sur l'Umbrel.
-Installe **Radthal** (et non « Radthal Node ») depuis cette boutique. Première version, **encore en test** : pour l'instant elle ne contient que
-le nœud et la page Nœud (les autres pages viennent ensuite). Si tu as déjà un nœud Radthal sur cet Umbrel (les applications ci-dessous), arrête-le
+Installe **Radthal** (et non « Radthal Node ») depuis cette boutique. Elle contient le nœud et toutes ses pages (Nœud, Tableau de bord, Mempool,
+Portefeuille, Horodatage) derrière un menu en haut, protégées par le mot de passe d'Umbrel. **Encore en test.** Si tu as déjà un nœud Radthal sur cet Umbrel (les applications ci-dessous), arrête-le
 avant : les deux ne peuvent pas utiliser le même port 9333.
 
 ## Les applications

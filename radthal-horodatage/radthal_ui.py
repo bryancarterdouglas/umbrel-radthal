@@ -26,26 +26,34 @@ PASSFILE = os.environ.get("PASSFILE", "/run/secrets/radthal_rpc_password")
 
 
 SHOW_PEER_ADDR = os.environ.get("SHOW_PEER_ADDR", "0") == "1"       # 1 = montrer les adresses completes (a eviter si tu partages une capture)
+PEER_NAMES = {}                                                     # adresse (sans le port) -> nom que TU donnes : PEER_NAMES="nom.exemple.org=Mon noeud,10.0.0.5=Mon Pi"
+for _p in os.environ.get("PEER_NAMES", "").split(","):
+    if "=" in _p:
+        PEER_NAMES[_p.split("=", 1)[0].strip().lower()] = _p.split("=", 1)[1].strip()
+_seed = os.environ.get("SEED_NODE", "").rsplit(":", 1)[0].strip().lower()
+if _seed:
+    PEER_NAMES.setdefault(_seed, "nœud de départ")
+import hashlib as _hashlib
+_PEER_SALT = os.urandom(8).hex()                                    # change a chaque demarrage : le pseudo ne permet pas de retrouver l'adresse
+_ANIMALS = ["Renard", "Loup", "Lynx", "Hibou", "Castor", "Blaireau", "Chamois", "Marmotte",
+            "Aigle", "Cerf", "Ours", "Faucon", "Sanglier", "Héron", "Loutre", "Belette"]
 
 
 def peer_addr(a):
-    """Adresse d'un pair, SANS le port et en partie masquee (203.0.x.x), pour qu'une capture d'ecran ne montre
-    ni ton adresse ni celle des autres. SHOW_PEER_ADDR=1 affiche l'adresse complete."""
+    """Remplace l'adresse d'un pair par un pseudo (Renard-42), pour qu'une capture d'ecran ne montre ni ton adresse
+    ni celle des autres. Le meme pair garde le meme pseudo tant que la page tourne. Un nom que tu as donne
+    (PEER_NAMES) ou le noeud de depart (SEED_NODE) s'affiche tel quel. SHOW_PEER_ADDR=1 affiche l'adresse complete."""
     a = str(a or "")
     if SHOW_PEER_ADDR or not a:
         return a
-    if a.startswith("127.") or a.startswith("[::1]"):
-        return "cet appareil"                  # un programme de ta machine (mineur, page web...)
-    m = re.fullmatch(r"(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}(?::\d+)?", a)
-    if m:
-        return "%s.%s.x.x" % m.groups()
-    m = re.fullmatch(r"\[([0-9a-fA-F:.]+)\](?::\d+)?", a)
-    if m:
-        return ":".join(m.group(1).split(":")[:2]) + ":…"
-    m = re.fullmatch(r"([a-z0-9]{6})[a-z0-9]*(\.onion|\.b32\.i2p)(?::\d+)?", a)
-    if m:
-        return m.group(1) + "…" + m.group(2)
-    return "(masquée)"
+    m = re.fullmatch(r"\[([^\]]+)\](?::\d+)?", a)                    # IPv6 : [adresse]:port
+    host = (m.group(1) if m else (a.rsplit(":", 1)[0] if a.count(":") == 1 else a)).lower()
+    if host in PEER_NAMES:
+        return PEER_NAMES[host]
+    if host.startswith("127.") or host == "::1":
+        return "cet appareil"                                       # un programme de ta machine (mineur, page web...)
+    h = _hashlib.sha256((_PEER_SALT + host).encode()).digest()
+    return "%s-%02d" % (_ANIMALS[h[0] % len(_ANIMALS)], h[1] % 100)
 LOGS = os.environ.get("LOGS", "/ckpool/logs")
 PORT = int(os.environ.get("PORT", "8000"))
 WALLET = os.environ.get("WALLET", "minage")

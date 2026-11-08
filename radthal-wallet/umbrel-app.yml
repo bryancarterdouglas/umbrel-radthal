@@ -7,7 +7,7 @@ tagline: Recevoir et envoyer des RDT depuis ton noeud
 description: >-
   Portefeuille Radthal : le solde du portefeuille de ton noeud, une adresse de reception avec QR code, l'envoi de RDT vers n'importe quelle adresse Radthal (apercu puis confirmation, mot de passe optionnel), l'historique des operations et des messages courts (280 caracteres) ecrits dans la chaine, lisibles par tout le monde. Les cles restent dans le noeud, cette page ne les voit jamais.
 releaseNotes: >-
-  La liste des pairs connectes cache maintenant leurs adresses (203.0.x.x, sans le port), pour qu'une capture d'ecran ne montre ni la tienne ni celle des autres. Rien d'autre ne change. Les pages se rechargent toutes seules apres la mise a jour.
+  La liste des pairs connectes remplace maintenant chaque adresse par un pseudo (Renard-42), pour qu'une capture d'ecran ne montre ni la tienne ni celle des autres. Rien d'autre ne change. Les pages se rechargent toutes seules apres la mise a jour.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

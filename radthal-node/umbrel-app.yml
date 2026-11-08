@@ -7,7 +7,7 @@ tagline: Noeud complet Radthal
 description: >-
   Le noeud Radthal (bitcoind) gere depuis Umbrel, avec une page d'etat : blocs, difficulte, pairs connectes, ports. Arreter l'app arrete le noeud.
 releaseNotes: >-
-  La liste des pairs connectes cache maintenant leurs adresses (203.0.x.x, sans le port), pour qu'une capture d'ecran ne montre ni la tienne ni celle des autres. Rien d'autre ne change. Les pages se rechargent toutes seules apres la mise a jour. Le noeud peut redemarrer pendant la mise a jour (environ 2 minutes).
+  La liste des pairs connectes remplace maintenant chaque adresse par un pseudo (Renard-42), pour qu'une capture d'ecran ne montre ni la tienne ni celle des autres. Rien d'autre ne change. Les pages se rechargent toutes seules apres la mise a jour. Le noeud peut redemarrer pendant la mise a jour (environ 2 minutes).
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

@@ -7,7 +7,7 @@ tagline: Statistiques du pool solo
 description: >-
   Statistiques du pool solo ckpool de Radthal : mineurs, hashrate, parts, et reglages de connexion pour un ASIC.
 releaseNotes: >-
-  La liste des pairs connectes cache maintenant leurs adresses (203.0.x.x, sans le port), pour qu'une capture d'ecran ne montre ni la tienne ni celle des autres. Rien d'autre ne change. Les pages se rechargent toutes seules apres la mise a jour.
+  La liste des pairs connectes remplace maintenant chaque adresse par un pseudo (Renard-42), pour qu'une capture d'ecran ne montre ni la tienne ni celle des autres. Rien d'autre ne change. Les pages se rechargent toutes seules apres la mise a jour.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

@@ -2,12 +2,12 @@ manifestVersion: 1.1
 id: radthal-one
 category: bitcoin
 name: Radthal
-version: "0.2.0"
-tagline: Noeud complet Radthal et ses pages, pret a l'emploi
+version: "0.3.0"
+tagline: Noeud, minage et pages Radthal, prets a l'emploi
 description: >-
-  Un noeud complet Radthal (fork experimental de Bitcoin Core) qui s'installe en un clic : rien a compiler, rien a copier sur l'Umbrel. L'application lance le noeud et ses pages, avec un menu en haut : Noeud (blocs, synchronisation, pairs avec un pseudo, jamais leur adresse), Tableau de bord, Mempool, Portefeuille (recevoir et envoyer des RDT) et Horodatage. Si tu as deja un noeud Radthal sur cet Umbrel (les applications Radthal Node, Dashboard, Wallet...), arrete-le avant d'installer celle-ci : les deux ne peuvent pas utiliser le meme port 9333.
+  Un noeud complet Radthal (fork experimental de Bitcoin Core) qui s'installe en un clic : rien a compiler, rien a copier sur l'Umbrel. L'application lance le noeud, le serveur de minage ckpool et les pages, avec un menu en haut : Noeud (blocs, synchronisation, pairs avec un pseudo, jamais leur adresse), Tableau de bord, Mempool, ckpool (mineurs et reglages de connexion), Portefeuille (recevoir et envoyer des RDT) et Horodatage. Pour miner, branche un mineur SHA-256 (Avalon, Antminer, Bitaxe...) sur le port 3333 de l'Umbrel avec ton adresse rdt1 comme nom d'utilisateur : la page ckpool donne les reglages. Le port 3333 sert uniquement a ton reseau local : ne le redirige jamais depuis ta box. Si tu as deja un noeud Radthal sur cet Umbrel (les applications Radthal Node, Dashboard, Wallet...), arrete-le avant d'installer celle-ci : les deux ne peuvent pas utiliser le meme port 9333.
 releaseNotes: >-
-  Toutes les pages sont maintenant dans l'application, avec un menu en haut : Noeud, Tableau de bord, Mempool, Portefeuille et Horodatage. Les pages ne sont joignables qu'apres le mot de passe d'Umbrel. L'application s'ouvre maintenant sur le port 3790 du menu ; le noeud et ses donnees ne changent pas. Le noeud peut redemarrer pendant la mise a jour (environ 2 minutes).
+  Le minage est dans l'application : ckpool (mode solo, 98 % du bloc a l'adresse du mineur et 2 % au developpeur) et sa page dans le menu. Le port 3333 des mineurs s'ouvre sur ton reseau local. Le noeud et ses donnees ne changent pas, mais il redemarre pendant la mise a jour (environ 2 minutes) et recoit un mot de passe interne pour ckpool.
 developer: Radthal Community
 website: https://github.com/bryancarterdouglas/Umbrel-radthal
 dependencies: []

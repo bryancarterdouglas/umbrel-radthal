@@ -1,8 +1,8 @@
 version: "3.7"
 
-# Radthal tout-en-un : le noeud et toutes ses pages (noeud, tableau de bord, mempool, portefeuille, horodatage),
-# sans rien d'autre a installer ni a copier sur l'Umbrel.
-# Les deux programmes viennent d'images toutes faites (ghcr.io/bryancarterdouglas), la version est fixee ici :
+# Radthal tout-en-un : le noeud, ckpool (le serveur de minage) et toutes les pages (noeud, tableau de bord, mempool,
+# ckpool, portefeuille, horodatage), sans rien d'autre a installer ni a copier sur l'Umbrel.
+# Les programmes viennent d'images toutes faites (ghcr.io/bryancarterdouglas), la version est fixee ici :
 # une nouvelle version de l'application = de nouvelles images.
 services:
   app_proxy:
@@ -13,19 +13,23 @@ services:
       APP_HOST: radthal-one_node_1
       APP_PORT: 3790
 
-  # Prepare les dossiers de donnees (ils appartiennent au programme du noeud, utilisateur 1000), puis s'arrete.
+  # Prepare les dossiers (ils appartiennent a l'utilisateur 1000, celui du noeud), cree le mot de passe interne de ckpool
+  # et le declare au noeud, puis s'arrete. Sans danger si on le relance.
   init:
-    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.3
+    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.4
     user: "0:0"
     restart: "no"
-    command: ["sh", "-c", "mkdir -p /data /state && chown 1000:1000 /data /state && chmod 700 /data"]
+    command: ["python", "/app/init.py"]
     volumes:
       - ${APP_DATA_DIR}/data:/data
       - ${APP_DATA_DIR}/ui:/state
+      - ${APP_DATA_DIR}/secrets:/secrets
+      - ${APP_DATA_DIR}/ckpool-logs:/ckpool-logs
 
-  # Le noeud Radthal (bitcoind). Seul le port du reseau (9333) est ouvert : le RPC reste a l'interieur.
+  # Le noeud Radthal (bitcoind). Deux ports sont ouverts : 9333 (le reseau Radthal) et 3333 (les mineurs, pour ton reseau
+  # local seulement : ne le redirige jamais depuis ta box). Le RPC reste a l'interieur : ni ckpool ni les pages ne passent par l'exterieur.
   node:
-    image: ghcr.io/bryancarterdouglas/radthal:0.1.3
+    image: ghcr.io/bryancarterdouglas/radthal:0.1.4
     user: "1000:1000"
     restart: on-failure
     # bitcoind a besoin de temps pour sauvegarder son etat a l'arret
@@ -35,6 +39,7 @@ services:
         condition: service_completed_successfully
     ports:
       - "9333:9333"
+      - "3333:3333"
     environment:
       # une seule zone de memoire (glibc) : evite que le noeud gonfle sans fin
       MALLOC_ARENA_MAX: "1"
@@ -50,9 +55,24 @@ services:
       - -minimumchainwork=000000000000000000000000000000000000000000000000278424e424e42244   # un noeud neuf reste "en synchronisation" tant qu'il n'a pas rattrape la chaine
       - -addnode=radthal-seed.duckdns.org:9333
 
+  # ckpool : le serveur de minage en solo. Meme reseau que le noeud (il lui parle en local) ; son mot de passe vient du secret
+  # cree par le service init. 98 % de chaque bloc vont a l'adresse rdt1... du mineur (son nom d'utilisateur), 2 % au developpeur.
+  ckpool:
+    image: ghcr.io/bryancarterdouglas/radthal-ckpool:0.1.4
+    user: "1000:1000"
+    restart: on-failure
+    stop_grace_period: 10s
+    network_mode: "service:node"
+    depends_on:
+      - node
+    entrypoint: ["/usr/local/bin/ckpool-app-entry"]
+    volumes:
+      - ${APP_DATA_DIR}/secrets:/secrets:ro
+      - ${APP_DATA_DIR}/ckpool-logs:/ckpool/logs
+
   # Les pages : meme reseau que le noeud (elles lui parlent en local) ; elles lisent son cookie RPC en lecture seule.
   web:
-    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.3
+    image: ghcr.io/bryancarterdouglas/radthal-interface:0.1.4
     user: "1000:1000"
     restart: on-failure
     stop_grace_period: 5s
@@ -62,8 +82,9 @@ services:
     volumes:
       - ${APP_DATA_DIR}/data:/data:ro
       - ${APP_DATA_DIR}/ui:/state
+      - ${APP_DATA_DIR}/ckpool-logs:/ckpool/logs:ro
     environment:
-      VIEWS: node,dashboard,mempool,wallet,stamp
+      VIEWS: node,dashboard,mempool,ckpool,wallet,stamp
       HUB_PORT: "3790"
       DEVICE: pc
       DOWN_HINT: "dans Umbrel"
@@ -72,6 +93,8 @@ services:
       WALLET: monportefeuille
       BACKUP_DIR: /data
       BACKUP_SHOW: "~/umbrel/app-data/radthal-one/data (sur ton Umbrel)"
+      LOGS: /ckpool/logs
+      STRATUM_PORT: "3333"
       STATE_DIR: /state
       STATE_SHOW: "~/umbrel/app-data/radthal-one/ui (sur ton Umbrel)"
       SEED_NODE: radthal-seed.duckdns.org:9333

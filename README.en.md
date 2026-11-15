@@ -18,7 +18,7 @@ Install **Radthal** (not "Radthal Node") from this store (see [Add the store to 
 
 **What was tested.** On a Raspberry Pi 5 running Umbrel: install, node sync, mining with an Avalon (one block found), wallet and a reboot of the Pi. Images also exist for amd64, but that is untested on Umbrel. Radthal remains an experimental project, with no guaranteed value.
 
-**Before installing.** Ports 9333 (network) and 3333 (mining) can only be used once: if you already have a Radthal node on this Umbrel (the separate apps below), or a `ckpool` started by hand, stop them first.
+**Before installing.** Ports 9333 (network) and 3333 (mining) can only be used once: if you already have a Radthal node on this Umbrel (the older separate apps "Radthal Node", "Radthal Wallet"...), or a `ckpool` started by hand, stop them first.
 
 ### Reusing an existing wallet
 
@@ -32,22 +32,16 @@ sudo chown -R 1000:1000 ~/umbrel/app-data/radthal-one/data/wallets
 
 Then open the **Wallet** page and click "Créer mon portefeuille" (create my wallet): the existing wallet is reloaded. Do not run the old node with the same wallet at the same time: two live copies would end up contradicting each other.
 
-## The separate apps (for people who already have a node)
+## The app's pages
 
-Six small web apps that let you **view and use an existing Radthal node** without the command line.
+- **Node**: node status (blocks, sync, peers shown with a nickname, never their address, ports).
+- **Dashboard**: overview: latest blocks, fork monitoring, difficulty, network power, miner.
+- **Mempool**: pending transactions, fee distribution, latest blocks.
+- **ckpool**: stats of the solo pool: miners, hashrate, shares, a miner's connection settings.
+- **Wallet**: balance, receiving address with QR code, sending RDT (preview then confirmation), history, backup, short messages written in the chain.
+- **Timestamping**: prove that a document existed at the date of a block (the SHA-256 fingerprint is computed in the browser; the document never leaves your device).
 
-> **They are not a one-click install.** They were made for the author's Raspberry Pi: they read files at specific locations on that Pi (see [What the apps assume](#what-the-apps-assume)). If you are starting from scratch, install the **Radthal** app above instead.
-
-| App | Port | What it does |
-|---|---|---|
-| **Radthal Node** | 3777 | runs the node (`bitcoind`) from Umbrel and shows its status: blocks, difficulty, peers, ports. **Stopping the app stops the node.** |
-| **Radthal Dashboard** | 3778 | overview: latest blocks, fork monitoring, difficulty, network power, miner |
-| **Radthal Mempool** | 3779 | pending transactions, fee distribution, latest blocks |
-| **Radthal ckpool** | 3780 | stats of the ckpool solo pool: miners, hashrate, shares, connection settings for an ASIC |
-| **Radthal Wallet** | 3781 | balance, receiving address with QR code, sending RDT (preview then confirmation), history, backup, short messages written in the chain |
-| **Radthal Horodatage** (timestamping) | 3782 | prove that a document existed at the date of a block (the SHA-256 fingerprint is computed in the browser; the document never leaves your device) |
-
-The first four pages are **read-only**. Wallet and Horodatage **act**: the keys stay in the node, the pages never see them. A message written in the chain is **public and permanent**.
+The first four pages are **read-only**. Wallet and Timestamping **act**: the keys stay in the node, the pages never see them. A message written in the chain is **public and permanent**.
 
 | Dashboard | ckpool | Node |
 |:---:|:---:|:---:|
@@ -59,25 +53,9 @@ The first four pages are **read-only**. Wallet and Horodatage **act**: the keys 
 
 1. Open Umbrel's **App Store**.
 2. Click the **three dots** at the top right, then **Community App Stores**.
-3. Paste `https://github.com/bryancarterdouglas/Umbrel-radthal` and confirm.
+3. Paste `https://github.com/bryancarterdouglas/umbrel-radthal` and confirm.
 
-Community stores are not vetted by the Umbrel team: only add stores from developers you trust, and read the code (it is short, in the `radthal-*` folders).
-
-## What the apps assume
-
-The pages talk to the **node's RPC** and read a few files on the Pi. On the author's Pi:
-
-| Item | Location / value |
-|---|---|
-| Radthal node with its RPC | on the host machine, port **9332**, user `radthal` |
-| RPC password | file `/home/umbrel/radthal/rpcpass.txt` (mounted read-only) |
-| Node programs (for **Radthal Node**) | compiled in `/home/umbrel/radthal/build`, data in `/home/umbrel/radthal-data` |
-| Node image (for **Radthal Node**) | `localhost:5000/radthal-build:v1`, served by a small local registry on the Pi (Umbrel always downloads images) |
-| ckpool logs (for **ckpool** and **Dashboard**) | `/home/umbrel/radthal/ckpool/logs` |
-| Node wallet (for **Wallet**) | named `minage` |
-| Certificates folder (for **Horodatage**) | `/home/umbrel/radthal/horodatage` |
-
-If your layout is different, adapt these paths in each app's `docker-compose.yml`.
+Community stores are not vetted by the Umbrel team: only add stores from developers you trust, and read the code (it is short, in the `radthal-one` folder).
 
 ## Security
 

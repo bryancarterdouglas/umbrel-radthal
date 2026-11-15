@@ -18,7 +18,7 @@ Installe **Radthal** (et non « Radthal Node ») depuis cette boutique (voir [Aj
 
 **Ce qui a été testé.** Sur un Raspberry Pi 5 sous Umbrel : installation, synchronisation du nœud, minage avec un Avalon (un bloc trouvé), portefeuille et redémarrage du Pi. Les images existent aussi pour amd64, mais ce n'est pas testé sur Umbrel. Radthal reste un projet expérimental, sans valeur garantie.
 
-**Avant d'installer.** Les ports 9333 (réseau) et 3333 (minage) ne peuvent servir qu'une fois : si tu as déjà un nœud Radthal sur cet Umbrel (les applications séparées plus bas), ou un `ckpool` lancé à la main, arrête-les d'abord.
+**Avant d'installer.** Les ports 9333 (réseau) et 3333 (minage) ne peuvent servir qu'une fois : si tu as déjà un nœud Radthal sur cet Umbrel (les anciennes applications séparées « Radthal Node », « Radthal Wallet »…), ou un `ckpool` lancé à la main, arrête-les d'abord.
 
 ### Reprendre un portefeuille existant
 
@@ -32,22 +32,16 @@ sudo chown -R 1000:1000 ~/umbrel/app-data/radthal-one/data/wallets
 
 Ouvre ensuite la page **Portefeuille** et clique sur « Créer mon portefeuille » : le portefeuille existant est rechargé. Ne fais pas tourner l'ancien nœud avec le même portefeuille en même temps : deux copies actives finiraient par se contredire.
 
-## Les applications séparées (pour qui a déjà un nœud)
+## Les pages de l'application
 
-Six petites applications web qui permettent de **voir et d'utiliser un nœud Radthal** existant sans ligne de commande.
+- **Nœud** : état du nœud (blocs, synchronisation, pairs avec un pseudo, jamais leur adresse, ports).
+- **Tableau de bord** : vue d'ensemble : derniers blocs, surveillance des forks, difficulté, puissance du réseau, mineur.
+- **Mempool** : transactions en attente, répartition des frais, derniers blocs.
+- **ckpool** : statistiques du pool solo : mineurs, hashrate, parts, réglages de connexion d'un mineur.
+- **Portefeuille** : solde, adresse de réception avec QR code, envoi de RDT (aperçu puis confirmation), historique, sauvegarde, messages courts écrits dans la chaîne.
+- **Horodatage** : prouver qu'un document existait à la date d'un bloc (l'empreinte SHA-256 est calculée dans le navigateur ; le document ne quitte jamais ton appareil).
 
-> **Elles ne sont pas une installation en un clic.** Elles ont été faites pour le Raspberry Pi de l'auteur : elles lisent des fichiers à des emplacements précis de ce Pi (voir [Ce que les applications supposent](#ce-que-les-applications-supposent)). Si tu démarres de zéro, installe plutôt l'application **Radthal** ci-dessus.
-
-| Application | Port | Rôle |
-|---|---|---|
-| **Radthal Node** | 3777 | lance le nœud (`bitcoind`) depuis Umbrel et affiche son état : blocs, difficulté, pairs, ports. **Arrêter l'application arrête le nœud.** |
-| **Radthal Dashboard** | 3778 | vue d'ensemble : derniers blocs, surveillance des forks, difficulté, puissance du réseau, mineur |
-| **Radthal Mempool** | 3779 | transactions en attente, répartition des frais, derniers blocs |
-| **Radthal ckpool** | 3780 | statistiques du pool solo ckpool : mineurs, hashrate, parts, réglages de connexion d'un ASIC |
-| **Radthal Wallet** | 3781 | solde, adresse de réception avec QR code, envoi de RDT (aperçu puis confirmation), historique, sauvegarde, messages courts écrits dans la chaîne |
-| **Radthal Horodatage** | 3782 | prouver qu'un document existait à la date d'un bloc (l'empreinte SHA-256 est calculée dans le navigateur ; le document ne quitte jamais ton appareil) |
-
-Les quatre premières pages **regardent** seulement. Wallet et Horodatage **agissent** : les clés restent dans le nœud, les pages ne les voient jamais. Un message écrit dans la chaîne est **public et définitif**.
+Les quatre premières pages **regardent** seulement. Portefeuille et Horodatage **agissent** : les clés restent dans le nœud, les pages ne les voient jamais. Un message écrit dans la chaîne est **public et définitif**.
 
 | Tableau de bord | ckpool | Nœud |
 |:---:|:---:|:---:|
@@ -59,25 +53,9 @@ Les quatre premières pages **regardent** seulement. Wallet et Horodatage **agis
 
 1. Ouvre l'**App Store** d'Umbrel.
 2. Clique sur les **trois points** en haut à droite, puis sur **Community App Stores**.
-3. Colle l'adresse `https://github.com/bryancarterdouglas/Umbrel-radthal` et confirme.
+3. Colle l'adresse `https://github.com/bryancarterdouglas/umbrel-radthal` et confirme.
 
-Les boutiques communautaires ne sont pas vérifiées par l'équipe d'Umbrel : n'en ajoute que de développeurs en qui tu as confiance, et lis le code (il est court, dans les dossiers `radthal-*`).
-
-## Ce que les applications supposent
-
-Les pages parlent au **RPC du nœud** et lisent quelques fichiers du Pi. Sur le Pi de l'auteur :
-
-| Élément | Emplacement / valeur |
-|---|---|
-| Nœud Radthal avec son RPC | sur la machine hôte, port **9332**, utilisateur `radthal` |
-| Mot de passe du RPC | fichier `/home/umbrel/radthal/rpcpass.txt` (monté en lecture seule) |
-| Programmes du nœud (pour **Radthal Node**) | compilés dans `/home/umbrel/radthal/build`, données dans `/home/umbrel/radthal-data` |
-| Image du nœud (pour **Radthal Node**) | `localhost:5000/radthal-build:v1`, servie par un petit registre local sur le Pi (Umbrel télécharge toujours les images) |
-| Journaux de ckpool (pour **ckpool** et **Dashboard**) | `/home/umbrel/radthal/ckpool/logs` |
-| Portefeuille du nœud (pour **Wallet**) | nommé `minage` |
-| Dossier des certificats (pour **Horodatage**) | `/home/umbrel/radthal/horodatage` |
-
-Si ta disposition est différente, il faut adapter ces chemins dans les fichiers `docker-compose.yml` de chaque application.
+Les boutiques communautaires ne sont pas vérifiées par l'équipe d'Umbrel : n'en ajoute que de développeurs en qui tu as confiance, et lis le code (il est court, dans le dossier `radthal-one`).
 
 ## Sécurité
 

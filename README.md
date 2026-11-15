@@ -1,19 +1,42 @@
-# Umbrel-radthal : pages Umbrel pour un nœud Radthal
+# Umbrel-radthal : Radthal pour Umbrel
 
 🇬🇧 [English version](README.en.md)
 
-Six petites applications web pour [Umbrel](https://umbrel.com) qui permettent de **voir et d'utiliser un nœud [Radthal](https://github.com/bryancarterdouglas/radthal)** sans ligne de commande. Radthal est un fork expérimental de Bitcoin Core : voir le dépôt principal pour ce que c'est, ses règles (dont la part de 2 % du créateur à partir du bloc 25 000) et ses avertissements.
+Boutique d'applications [Umbrel](https://umbrel.com) pour **[Radthal](https://github.com/bryancarterdouglas/radthal)**, un fork expérimental de Bitcoin Core : voir le dépôt principal pour ce que c'est, ses règles (dont la part de 2 % du créateur à partir du bloc 25 000) et ses avertissements.
 
-> **Ce n'est pas une installation en un clic.** Ces applications ont été faites pour le Raspberry Pi de l'auteur : elles lisent des fichiers à des emplacements précis de ce Pi (voir [Ce que les applications supposent](#ce-que-les-applications-supposent)). Si tu veux simplement **faire tourner un nœud**, suis le README de [radthal](https://github.com/bryancarterdouglas/radthal) (Docker, sans Umbrel). Ces pages sont un confort en plus, pour qui a déjà un Umbrel et un nœud Radthal.
+## L'application « Radthal » : installation en un clic
 
-## Nouveau : l'application « Radthal » (en test)
+Une application **autonome** : un seul bouton « Installer », sans rien compiler ni copier sur l'Umbrel. Elle lance :
 
-Une application **autonome** : elle lance le nœud et sa page d'état depuis des images toutes faites, sans rien compiler ni copier sur l'Umbrel.
-Installe **Radthal** (et non « Radthal Node ») depuis cette boutique. Elle contient le nœud et toutes ses pages (Nœud, Tableau de bord, Mempool,
-Portefeuille, Horodatage) derrière un menu en haut, protégées par le mot de passe d'Umbrel. **Encore en test.** Si tu as déjà un nœud Radthal sur cet Umbrel (les applications ci-dessous), arrête-le
-avant : les deux ne peuvent pas utiliser le même port 9333.
+- le **nœud** Radthal ;
+- le serveur de minage **ckpool** (mode solo), pour y brancher un mineur SHA-256 (Avalon, Antminer, Bitaxe…) ;
+- toutes les **pages**, derrière un menu en haut et protégées par le mot de passe d'Umbrel : Nœud, Tableau de bord, Mempool, ckpool, Portefeuille et Horodatage.
 
-## Les applications
+Installe **Radthal** (et non « Radthal Node ») depuis cette boutique (voir [Ajouter la boutique à Umbrel](#ajouter-la-boutique-à-umbrel)).
+
+**Miner.** Branche ton mineur sur le port **3333** de l'Umbrel, avec ton adresse `rdt1…` comme nom d'utilisateur : la page **ckpool** donne les réglages. Ce port est fait pour ton réseau local : ne le redirige jamais depuis ta box.
+
+**Ce qui a été testé.** Sur un Raspberry Pi 5 sous Umbrel : installation, synchronisation du nœud, minage avec un Avalon (un bloc trouvé), portefeuille et redémarrage du Pi. Les images existent aussi pour amd64, mais ce n'est pas testé sur Umbrel. Radthal reste un projet expérimental, sans valeur garantie.
+
+**Avant d'installer.** Les ports 9333 (réseau) et 3333 (minage) ne peuvent servir qu'une fois : si tu as déjà un nœud Radthal sur cet Umbrel (les applications séparées plus bas), ou un `ckpool` lancé à la main, arrête-les d'abord.
+
+### Reprendre un portefeuille existant
+
+L'application crée son propre portefeuille, `monportefeuille`, vide au départ. Pour reprendre celui d'un ancien nœud (un dossier qui contient `wallet.dat`) : **sauvegarde-le**, arrête l'ancien nœud, puis copie son dossier dans celui de l'application, sous ce nom :
+
+```bash
+sudo mkdir -p ~/umbrel/app-data/radthal-one/data/wallets
+sudo cp -a /chemin/de/ton/ancien/portefeuille ~/umbrel/app-data/radthal-one/data/wallets/monportefeuille
+sudo chown -R 1000:1000 ~/umbrel/app-data/radthal-one/data/wallets
+```
+
+Ouvre ensuite la page **Portefeuille** et clique sur « Créer mon portefeuille » : le portefeuille existant est rechargé. Ne fais pas tourner l'ancien nœud avec le même portefeuille en même temps : deux copies actives finiraient par se contredire.
+
+## Les applications séparées (pour qui a déjà un nœud)
+
+Six petites applications web qui permettent de **voir et d'utiliser un nœud Radthal** existant sans ligne de commande.
+
+> **Elles ne sont pas une installation en un clic.** Elles ont été faites pour le Raspberry Pi de l'auteur : elles lisent des fichiers à des emplacements précis de ce Pi (voir [Ce que les applications supposent](#ce-que-les-applications-supposent)). Si tu démarres de zéro, installe plutôt l'application **Radthal** ci-dessus.
 
 | Application | Port | Rôle |
 |---|---|---|

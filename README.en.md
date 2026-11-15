@@ -1,19 +1,42 @@
-# Umbrel-radthal: Umbrel pages for a Radthal node
+# Umbrel-radthal: Radthal for Umbrel
 
 🇫🇷 [Version française](README.md)
 
-Six small web apps for [Umbrel](https://umbrel.com) that let you **view and use a [Radthal](https://github.com/bryancarterdouglas/radthal) node** without the command line. Radthal is an experimental Bitcoin Core fork: see the main repository for what it is, its rules (including the creator's 2% share from block 25,000) and its warnings.
+An [Umbrel](https://umbrel.com) app store for **[Radthal](https://github.com/bryancarterdouglas/radthal)**, an experimental Bitcoin Core fork: see the main repository for what it is, its rules (including the creator's 2% share from block 25,000) and its warnings.
 
-> **This is not a one-click install.** These apps were made for the author's Raspberry Pi: they read files at specific locations on that Pi (see [What the apps assume](#what-the-apps-assume)). If you simply want to **run a node**, follow the README of [radthal](https://github.com/bryancarterdouglas/radthal) (Docker, no Umbrel needed; there is an [English version](https://github.com/bryancarterdouglas/radthal/blob/main/README.en.md)). These pages are an extra comfort for people who already have an Umbrel and a Radthal node.
+## The "Radthal" app: one-click install
 
-## New: the "Radthal" app (testing)
+A **self-contained** app: a single "Install" button, with nothing to compile or copy onto the Umbrel. It runs:
 
-A **self-contained** app: it runs the node and its status page from ready-made images, with nothing to compile or copy onto the Umbrel.
-Install **Radthal** (not "Radthal Node") from this store. It contains the node and all its pages (Node, Dashboard, Mempool,
-Wallet, Timestamping) behind a menu bar, protected by the Umbrel password. **Still being tested.** If you already have a Radthal node on this Umbrel (the apps below), stop it first: the two cannot
-use the same port 9333.
+- the Radthal **node**;
+- the **ckpool** mining server (solo mode), so you can connect a SHA-256 miner (Avalon, Antminer, Bitaxe...);
+- all the **pages**, behind a menu bar and protected by the Umbrel password: Node, Dashboard, Mempool, ckpool, Wallet and Timestamping.
 
-## The apps
+Install **Radthal** (not "Radthal Node") from this store (see [Add the store to Umbrel](#add-the-store-to-umbrel)).
+
+**Mining.** Point your miner at port **3333** of the Umbrel, with your `rdt1...` address as the user name: the **ckpool** page shows the settings. This port is meant for your local network only: never forward it from your router.
+
+**What was tested.** On a Raspberry Pi 5 running Umbrel: install, node sync, mining with an Avalon (one block found), wallet and a reboot of the Pi. Images also exist for amd64, but that is untested on Umbrel. Radthal remains an experimental project, with no guaranteed value.
+
+**Before installing.** Ports 9333 (network) and 3333 (mining) can only be used once: if you already have a Radthal node on this Umbrel (the separate apps below), or a `ckpool` started by hand, stop them first.
+
+### Reusing an existing wallet
+
+The app creates its own wallet, `monportefeuille`, empty at first. To reuse the wallet of an old node (a folder containing `wallet.dat`): **back it up**, stop the old node, then copy its folder into the app's folder under that name:
+
+```bash
+sudo mkdir -p ~/umbrel/app-data/radthal-one/data/wallets
+sudo cp -a /path/to/your/old/wallet ~/umbrel/app-data/radthal-one/data/wallets/monportefeuille
+sudo chown -R 1000:1000 ~/umbrel/app-data/radthal-one/data/wallets
+```
+
+Then open the **Wallet** page and click "Créer mon portefeuille" (create my wallet): the existing wallet is reloaded. Do not run the old node with the same wallet at the same time: two live copies would end up contradicting each other.
+
+## The separate apps (for people who already have a node)
+
+Six small web apps that let you **view and use an existing Radthal node** without the command line.
+
+> **They are not a one-click install.** They were made for the author's Raspberry Pi: they read files at specific locations on that Pi (see [What the apps assume](#what-the-apps-assume)). If you are starting from scratch, install the **Radthal** app above instead.
 
 | App | Port | What it does |
 |---|---|---|
